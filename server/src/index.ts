@@ -244,20 +244,37 @@ io.on('connection', (socket) => {
     const player = currentRoom.players.get(currentPlayerId);
     if (player) player.connected = false;
 
-    // 60s grace period before removing
-    setTimeout(() => {
-      const p = currentRoom!.players.get(currentPlayerId!);
-      if (p && !p.connected) {
-        currentRoom!.players.delete(currentPlayerId!);
-        currentRoom!.socketMap.delete(socket.id);
-        currentRoom!.turnOrder = currentRoom!.turnOrder.filter(id => id !== currentPlayerId);
-        broadcastToAll(currentRoom!, { type: 'player_left', playerId: currentPlayerId! });
-
-        if (currentRoom!.players.size === 0) {
-          rooms.delete(currentRoom!.code);
+    // If this was the active player, skip their turn
+    if (currentRoom.turnOrder[currentRoom.activeTurnIndex] === currentPlayerId) {
+      currentRoom.activeTurnIndex++;
+      if (currentRoom.activeTurnIndex < currentRoom.turnOrder.length) {
+        const nextId = currentRoom.turnOrder[currentRoom.activeTurnIndex];
+        const nextPlayer = currentRoom.players.get(nextId);
+        if (nextPlayer) {
+          broadcastToAll(currentRoom, {
+            type: 'turn_started',
+            playerId: nextId,
+            playerName: nextPlayer.name,
+            holeNumber: currentRoom.currentHole,
+          });
         }
       }
-    }, 60_000);
+    }
+
+    // 30s rejoin window, then remove
+    setTimeout(() => {
+      if (!currentRoom) return;
+      const p = currentRoom.players.get(currentPlayerId!);
+      if (p && !p.connected) {
+        currentRoom.players.delete(currentPlayerId!);
+        currentRoom.socketMap.delete(socket.id);
+        currentRoom.turnOrder = currentRoom.turnOrder.filter(id => id !== currentPlayerId);
+        broadcastToAll(currentRoom, { type: 'player_left', playerId: currentPlayerId! });
+        if (currentRoom.players.size === 0) {
+          rooms.delete(currentRoom.code);
+        }
+      }
+    }, 30_000);
   });
 });
 

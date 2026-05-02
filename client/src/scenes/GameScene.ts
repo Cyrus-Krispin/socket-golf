@@ -34,6 +34,8 @@ export class GameScene extends Phaser.Scene {
   private watchingText!: Phaser.GameObjects.Text;
   private canShoot = false;
   private remoteShotQueue: { angle: number; power: number }[] = [];
+  private disconnectOverlay!: Phaser.GameObjects.Text;
+  private reconnected = false;
 
   constructor() {
     super({ key: 'GameScene' });
@@ -97,6 +99,26 @@ export class GameScene extends Phaser.Scene {
     this.turnText = this.add.text(320, 8, '', { fontFamily: '"Press Start 2P", "Courier New", monospace', fontSize: '10px', color: '#4ecdc4' }).setOrigin(0.5, 0);
     this.strokeText = this.add.text(630, 8, 'Stroke 0', { ...mono, fontSize: '10px', color: '#888' }).setOrigin(1, 0);
     this.watchingText = this.add.text(320, 180, '', { fontFamily: '"Press Start 2P", "Courier New", monospace', fontSize: '14px', color: '#e0e0e0', backgroundColor: '#00000088', padding: { x: 12, y: 8 } }).setOrigin(0.5).setAlpha(0);
+
+    // Disconnect overlay
+    this.disconnectOverlay = this.add.text(320, 220, '', {
+      fontFamily: '"Press Start 2P", "Courier New", monospace',
+      fontSize: '12px', color: '#eb5757', backgroundColor: '#000000cc',
+      padding: { x: 16, y: 10 },
+    }).setOrigin(0.5).setAlpha(0).setDepth(100);
+
+    // Connection events
+    socket.on('disconnect', () => {
+      this.disconnectOverlay.setText('Connection lost...\nReconnecting...');
+      this.disconnectOverlay.setAlpha(1);
+    });
+    socket.on('connect', () => {
+      if (this.disconnectOverlay.alpha > 0) {
+        this.disconnectOverlay.setText('Reconnected!');
+        this.disconnectOverlay.setColor('#6fcf97');
+        this.time.delayedCall(1500, () => this.disconnectOverlay.setAlpha(0));
+      }
+    });
 
     // Determine initial turn
     this.isMyTurn = activePlayerId === localPlayerId;
