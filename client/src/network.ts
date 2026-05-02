@@ -1,15 +1,29 @@
-import Phaser from 'phaser';
 import { io, Socket } from 'socket.io-client';
-import type { ServerMessage, ClientMessage, Player, ScoreEntry, FinalScore } from 'shared';
+import type { Player } from 'shared';
 
-// ---- Shared socket state ----
 export let socket: Socket;
-export let playerId: string | null = null;
+export let localPlayerId: string | null = null;
 export let roomCode: string | null = null;
-export let players: Player[] = [];
-export let scores: ScoreEntry[] = [];
-export let finalScores: FinalScore[] | null = null;
+export let playerList: Player[] = [];
+export let currentHole = 0;
+export let activePlayerId: string | null = null;
+export let isMyTurn = false;
 
 export function connectSocket() {
+  if (socket?.connected) return;
   socket = io('/', { transports: ['websocket'] });
+}
+
+export function setLocalPlayer(id: string, code: string) {
+  localPlayerId = id;
+  roomCode = code;
+}
+
+export function updatePlayers(players: Player[]) {
+  playerList = players;
+}
+
+export function setTurn(activeId: string) {
+  activePlayerId = activeId;
+  isMyTurn = activeId === localPlayerId;
 }

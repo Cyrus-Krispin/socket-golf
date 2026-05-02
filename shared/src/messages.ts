@@ -61,6 +61,7 @@ export type ServerMessage =
 export type ClientMessage =
   | { type: 'create_room'; playerName: string; maxPlayers?: number }
   | { type: 'join_room'; roomCode: string; playerName: string }
+  | { type: 'start_game' }
   | { type: 'shot_taken'; shot: ShotMessage }
   | { type: 'hole_completed'; playerId: string; strokes: number; par: number }
   | { type: 'ball_reset'; playerId: string };
