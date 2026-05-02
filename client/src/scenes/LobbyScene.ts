@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { connectSocket, socket, setLocalPlayer, updatePlayers, playerList } from '../network';
+import { connectSocket, socket, setLocalPlayer, updatePlayers, setTurn, playerList } from '../network';
 
 export class LobbyScene extends Phaser.Scene {
   private domContainer!: HTMLDivElement;
@@ -114,7 +114,8 @@ export class LobbyScene extends Phaser.Scene {
           this.showError(msg.message);
           break;
         case 'turn_started':
-          this.launchGame(msg.holeNumber);
+          setTurn(msg.playerId);
+          this.launchGame(msg.holeNumber, msg.playerName);
           break;
       }
     });
@@ -172,8 +173,8 @@ export class LobbyScene extends Phaser.Scene {
     }
   }
 
-  private launchGame(holeNumber: number) {
+  private launchGame(holeNumber: number, activeName?: string) {
     this.domContainer.remove();
-    this.scene.start('GameScene', { holeIndex: (holeNumber || 1) - 1 });
+    this.scene.start('GameScene', { holeIndex: (holeNumber || 1) - 1, activeName: activeName || '' });
   }
 }

@@ -47,14 +47,15 @@ export class GameScene extends Phaser.Scene {
     this.load.json('hole3', '/src/courses/hole3.json');
   }
 
-  init(data: { holeIndex: number }) {
+  init(data: { holeIndex: number; activeName?: string }) {
     this.holeIndex = data.holeIndex ?? 0;
     this.strokeCount = 0;
-    this.stillFrames = 60; // Start "stopped"
+    this.stillFrames = 60;
     this.holeDone = false;
     this.isAiming = false;
     this.canShoot = false;
     this.remoteShotQueue = [];
+    if (data.activeName) this.activePlayerName = data.activeName;
   }
 
   create() {
@@ -164,6 +165,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private onTurnStarted(pId: string, name: string, holeNum: number) {
+    setTurn(pId);
     this.isMyTurn = pId === localPlayerId;
     this.activePlayerName = name;
     this.strokeCount = 0;
