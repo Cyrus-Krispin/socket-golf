@@ -10,6 +10,13 @@ const config: Phaser.Types.Core.GameConfig = {
   pixelArt: true,
   roundPixels: true,
   backgroundColor: '#1a1a2e',
+  physics: {
+    default: 'matter',
+    matter: {
+      gravity: { x: 0, y: 0 },
+      debug: false,
+    },
+  },
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,

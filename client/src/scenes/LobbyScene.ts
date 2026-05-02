@@ -40,7 +40,7 @@ export class LobbyScene extends Phaser.Scene {
 
   private getHTML() {
     return `<style>
-      #lobby-ui{position:absolute;top:0;left:0;width:100%;height:100%;
+      #lobby-ui{position:absolute;top:0;left:0;width:100%;height:100%;z-index:10;
         display:flex;flex-direction:column;align-items:center;
         justify-content:center;gap:10px;
         font-family:"Courier New",monospace;color:#e0e0e0;pointer-events:none}
@@ -108,7 +108,7 @@ export class LobbyScene extends Phaser.Scene {
         case 'player_joined':
           this.playerNames.push(msg.playerName);
           this.renderPlayers(this.playerNames.map((n, i) => ({ id: String(i), name: n })));
-          this.checkAutoStart(this.playerNames.length + 1);
+          this.checkAutoStart(this.playerNames.length);
           break;
         case 'error':
           this.showError(msg.message);
