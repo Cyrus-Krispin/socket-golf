@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>socket-golf — determinism spike</title>
+<style>
+  body { margin:0; background:#1a1a2e; color:#e0e0e0; font:14px monospace; display:flex; }
+  canvas { border:1px solid #333; }
+  #panel { padding:16px; width:300px; }
+  h2 { color:#4ecdc4; font-size:14px; margin:0 0 8px; }
+  .result { background:#16213e; padding:12px; margin:8px 0; border:1px solid #333; }
+  .pass { color:#6fcf97; }
+  .risk { color:#f2994a; }
+  .fail { color:#eb5757; }
+  .label { color:#888; font-size:11px; }
+  .value { font-size:18px; font-weight:bold; }
+  table { width:100%; border-collapse:collapse; margin:8px 0; }
+  td { padding:4px 8px; border:1px solid #333; }
+  td:first-child { color:#888; }
+  td:last-child { text-align:right; font-weight:bold; }
+  button { width:100%; padding:10px; margin:4px 0; background:#2a2a3e; color:#e0e0e0; border:1px solid #555; font:12px monospace; cursor:pointer; }
+  button:hover { border-color:#4ecdc4; }
+  .note { color:#555; font-size:11px; margin-top:16px; }
+</style>
+</head>
+<body>
+<canvas id="c" width="600" height="300"></canvas>
+<div id="panel">
+  <h2>DETERMINISM SPIKE</h2>
+  <div class="label">Result at t=5s</div>
+  <div class="result">
+    <div class="label">Ball position (px)</div>
+    <div><span class="value" id="posX">—</span> <span class="label">X</span></div>
+    <div><span class="value" id="posY">—</span> <span class="label">Y</span></div>
+    <div style="margin-top:8px;"><span class="value" id="vel">—</span> <span class="label">velocity magnitude</span></div>
+  </div>
+  <table>
+    <tr><td>Impulse angle</td><td>1.047 rad (60°)</td></tr>
+    <tr><td>Impulse power</td><td>0.50 → 0.08 N</td></tr>
+    <tr><td>Timestep</td><td>Fixed 16.667ms x 300 frames</td></tr>
+    <tr><td>Frames run</td><td id="frames">—</td></tr>
+    <tr><td>Sim time</td><td>5.000s</td></tr>
+    <tr><td>Friction</td><td>0.05 (default)</td></tr>
+  </table>
+  <button onclick="runSpike()">RUN SPIKE</button>
+  <div class="note">
+    Open this page in TWO tabs.<br>
+    Click RUN in each tab.<br>
+    Compare X,Y values.
+  </div>
+  <div class="note" id="verdict" style="font-size:13px;"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.20.0/matter.min.js"></script>
+<script>
+const { Engine, Bodies, Body, Composite, Render, Runner, Vector } = Matter;
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let engine, ball, walls;
+
+function setupWorld() {
+  engine = Engine.create({
+    gravity: { x: 0, y: 0, scale: 0 }, // No gravity for 2D top-down
+  });
+
+  // Ball at tee position (matching design doc)
+  ball = Bodies.circle(80, 140, 5, {
+    restitution: 0.6,
+    friction: 0.05,
+    frictionAir: 0.01,
+    density: 0.002,
+    label: 'ball'
+  });
+
+  // Walls (same as spike plan)
+  walls = [
+    // Outer boundary
+    Bodies.rectangle(300, 0, 600, 10, { isStatic: true }),              // top
+    Bodies.rectangle(300, 300, 600, 10, { isStatic: true }),            // bottom
+    Bodies.rectangle(0, 150, 10, 300, { isStatic: true }),              // left
+    Bodies.rectangle(600, 150, 10, 300, { isStatic: true }),            // right
+    // Obstacles
+    Bodies.rectangle(160, 80, 20, 20, { isStatic: true }),              // near start
+    Bodies.rectangle(300, 120, 30, 10, { isStatic: true }),             // narrow barrier
+    Bodies.rectangle(420, 160, 15, 15, { isStatic: true }),             // near hole
+    Bodies.rectangle(120, 160, 25, 10, { isStatic: true }),             // side wall
+    Bodies.rectangle(340, 60, 15, 20, { isStatic: true }),              // corner block
+  ];
+
+  Composite.add(engine.world, [ball, ...walls]);
+}
+
+function runSpike() {
+  // Fresh setup each run
+  setupWorld();
+
+  // Fixed delta: 1000ms / 60 = 16.667ms per step
+  const FIXED_DELTA = 1000 / 60;
+  const RUN_DURATION = 5000; // 5 seconds
+  const TOTAL_FRAMES = RUN_DURATION / FIXED_DELTA; // 300 frames
+
+  // Compute impulse from design doc: impulse = 0.01 + power * 0.14
+  const angle = 1.047; // radians (60 degrees clockwise from right)
+  const power = 0.5;
+  const impulseMag = 0.01 + power * 0.14; // 0.08
+
+  // Apply as velocity impulse (not force) — setVelocity gives a direct initial speed
+  // Scale to match design doc travel estimates (~220px at power 0.5)
+  const speedScale = 25; // tuned to match ~220px travel at power 0.5 with default friction
+  const vx = Math.cos(angle) * impulseMag * speedScale;
+  const vy = Math.sin(angle) * impulseMag * speedScale;
+  Body.setVelocity(ball, { x: vx, y: vy });
+
+  // Run simulation with fixed timestep
+  for (let i = 0; i < TOTAL_FRAMES; i++) {
+    Engine.update(engine, FIXED_DELTA);
+  }
+
+  // Read final position
+  const px = ball.position.x.toFixed(2);
+  const py = ball.position.y.toFixed(2);
+  const velMag = Math.sqrt(ball.velocity.x ** 2 + ball.velocity.y ** 2).toFixed(4);
+
+  document.getElementById('posX').textContent = px;
+  document.getElementById('posY').textContent = py;
+  document.getElementById('vel').textContent = velMag;
+  document.getElementById('frames').textContent = TOTAL_FRAMES;
+
+  // Also log to console for easy copy-paste comparison
+  console.log(`SPIKE RESULT: x=${px} y=${py} vel=${velMag}`);
+  console.log(`Copy for comparison: ${px},${py}`);
+
+  // Draw the result
+  drawWorld();
+}
+
+function drawWorld() {
+  const { Composite } = Matter;
+
+  // Background
+  ctx.fillStyle = '#16213e';
+  ctx.fillRect(0, 0, 600, 300);
+
+  // Fairway approximation
+  ctx.fillStyle = '#1e5e34';
+  ctx.fillRect(0, 0, 600, 300);
+
+  // Draw walls
+  const bodies = Composite.allBodies(engine.world);
+  bodies.forEach(body => {
+    if (body.isStatic && body !== ball) {
+      ctx.fillStyle = '#5a5a6e';
+      ctx.strokeStyle = '#7a7a8e';
+      ctx.lineWidth = 1;
+      const verts = body.vertices;
+      ctx.beginPath();
+      ctx.moveTo(verts[0].x, verts[0].y);
+      for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x, verts[i].y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+  });
+
+  // Draw ball trail (path over time)
+  // Re-run a lightweight version for the trail
+  const trailEngine = Engine.create({ gravity: { x: 0, y: 0, scale: 0 } });
+  const trailBall = Bodies.circle(80, 140, 5, { restitution: 0.6, friction: 0.05, frictionAir: 0.01, density: 0.002 });
+  const trailWalls = walls.map(w => Bodies.rectangle(w.position.x, w.position.y, w.bounds.max.x - w.bounds.min.x, w.bounds.max.y - w.bounds.min.y, { isStatic: true }));
+  Composite.add(trailEngine.world, [trailBall, ...trailWalls]);
+  Body.applyForce(trailBall, trailBall.position, { x: Math.cos(1.047) * 0.08, y: Math.sin(1.047) * 0.08 });
+  Body.setVelocity(trailBall, { x: Math.cos(1.047) * 0.08 * 25, y: Math.sin(1.047) * 0.08 * 25 });
+
+  // Draw trail
+  ctx.strokeStyle = '#4ecdc444';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(80, 140);
+  for (let i = 0; i < 300; i += 2) {
+    Engine.update(trailEngine, 1000/60);
+    ctx.lineTo(trailBall.position.x, trailBall.position.y);
+  }
+  ctx.stroke();
+
+  // Draw ball at final position
+  ctx.fillStyle = '#f0f0f0';
+  ctx.beginPath();
+  ctx.arc(ball.position.x, ball.position.y, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#888';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Label
+  ctx.fillStyle = '#e0e0e0';
+  ctx.font = '10px monospace';
+  ctx.fillText(`Final: (${ball.position.x.toFixed(1)}, ${ball.position.y.toFixed(1)})`, ball.position.x + 10, ball.position.y - 10);
+
+  // Draw start position
+  ctx.fillStyle = '#4ecdc4';
+  ctx.beginPath();
+  ctx.arc(80, 140, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillText('START (80, 140)', 88, 140);
+}
+
+// Auto-run on load
+setupWorld();
+drawWorld();
+</script>
+</body>
+</html>
