@@ -11,7 +11,7 @@ export let isMyTurn = false;
 
 export function connectSocket() {
   if (socket?.connected) return;
-  socket = io('/', { transports: ['websocket'] });
+  socket = io(import.meta.env.VITE_SERVER_URL ?? '/', { transports: ['websocket'] });
 }
 
 export function setLocalPlayer(id: string, code: string) {
