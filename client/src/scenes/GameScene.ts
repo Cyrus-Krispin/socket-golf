@@ -42,9 +42,9 @@ export class GameScene extends Phaser.Scene {
   }
 
   preload() {
-    this.load.json('hole1', '/src/courses/hole1.json');
-    this.load.json('hole2', '/src/courses/hole2.json');
-    this.load.json('hole3', '/src/courses/hole3.json');
+    this.load.json('hole1', '/courses/hole1.json');
+    this.load.json('hole2', '/courses/hole2.json');
+    this.load.json('hole3', '/courses/hole3.json');
   }
 
   init(data: { holeIndex: number; activeName?: string }) {
