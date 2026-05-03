@@ -28,3 +28,13 @@ export function isBallInHole(
   const dy = ballY - holeY;
   return Math.sqrt(dx * dx + dy * dy) < HOLE_TRIGGER_RADIUS;
 }
+
+// Matter.js Verlet integration reads positionPrev — not velocity — as the
+// motion source. Setting velocity directly is overwritten on the next step.
+export function applyVelocity(body: MatterJS.BodyType, vx: number, vy: number): void {
+  (body as any).velocity.x = vx;
+  (body as any).velocity.y = vy;
+  (body as any).positionPrev.x = body.position.x - vx;
+  (body as any).positionPrev.y = body.position.y - vy;
+  (body as any).speed = Math.sqrt(vx * vx + vy * vy);
+}

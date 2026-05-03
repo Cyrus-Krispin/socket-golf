@@ -15,6 +15,7 @@ const config: Phaser.Types.Core.GameConfig = {
     matter: {
       gravity: { x: 0, y: 0 },
       debug: false,
+      autoUpdate: false,
     },
   },
   scale: {

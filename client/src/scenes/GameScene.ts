@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
-import { powerToImpulse, isBallStopped, isBallInHole } from '../physics';
-import { socket, localPlayerId, activePlayerId, setTurn, currentHole } from '../network';
+import { powerToImpulse, isBallStopped, isBallInHole, applyVelocity } from '../physics';
+import { socket, localPlayerId, activePlayerId, setTurn, currentHole, playerList } from '../network';
 
 interface CourseData {
   name: string;
@@ -59,7 +59,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   create() {
-    this.cameras.main.setBackgroundColor('#1a1a2e');
+    this.cameras.main.setBackgroundColor('#1a4020');
 
     const holeNum = this.holeIndex + 1;
     this.courseData = this.cache.json.get(`hole${holeNum}`) as CourseData;
@@ -86,9 +86,9 @@ export class GameScene extends Phaser.Scene {
     // Hole detection
     this.matter.world.on('collisionstart', (_e: any, a: MatterJS.BodyType, b: MatterJS.BodyType) => {
       if (this.holeDone || !this.ball) return;
-      const isBall = (a.label === 'ball' ? a : b.label === 'ball' ? a : null);
-      const isHole = (a.label === 'hole' ? a : b.label === 'hole' ? a : null);
-      if (isBall && isHole) {
+      const hasBall = a.label === 'ball' || b.label === 'ball';
+      const hasHole = a.label === 'hole' || b.label === 'hole';
+      if (hasBall && hasHole) {
         const vel = Math.sqrt(this.ball.velocity.x ** 2 + this.ball.velocity.y ** 2);
         if (vel < 0.5) this.onHoleComplete();
       }
@@ -184,8 +184,7 @@ export class GameScene extends Phaser.Scene {
 
     // Reset ball to tee
     if (this.ball) {
-      this.ball.velocity.x = 0;
-      this.ball.velocity.y = 0;
+      applyVelocity(this.ball, 0, 0);
     }
     this.matter.world.remove(this.ball);
     this.ball = this.matter.add.circle(this.courseData.tee.x, this.courseData.tee.y, 4, {
@@ -206,8 +205,7 @@ export class GameScene extends Phaser.Scene {
   private applyRemoteShot(angle: number, power: number) {
     if (!this.ball) return;
     const impulse = powerToImpulse(power);
-    this.ball.velocity.x = Math.cos(angle) * impulse;
-    this.ball.velocity.y = Math.sin(angle) * impulse;
+    applyVelocity(this.ball, Math.cos(angle) * impulse, Math.sin(angle) * impulse);
     this.stillFrames = 0;
   }
 
@@ -236,45 +234,72 @@ export class GameScene extends Phaser.Scene {
   private drawCourse() {
     const g = this.graphics;
     g.clear();
-    g.fillStyle(0x16213e);
+
+    // Rough — dark green background
+    g.fillStyle(0x1a4020);
     g.fillRect(0, 0, 640, 360);
 
-    // Fairway
     const verts = this.courseData.fairway.vertices;
     if (verts.length > 2) {
-      g.fillStyle(0x2d8a4e);
+      // Fairway shadow — offset polygon 3px for depth cue
+      g.fillStyle(0x1e5a28);
+      g.beginPath();
+      g.moveTo(verts[0].x + 3, verts[0].y + 3);
+      for (let i = 1; i < verts.length; i++) g.lineTo(verts[i].x + 3, verts[i].y + 3);
+      g.closePath();
+      g.fillPath();
+
+      // Fairway surface
+      g.fillStyle(0x3aaa5e);
+      g.lineStyle(1, 0x2a8040);
       g.beginPath();
       g.moveTo(verts[0].x, verts[0].y);
       for (let i = 1; i < verts.length; i++) g.lineTo(verts[i].x, verts[i].y);
       g.closePath();
       g.fillPath();
+      g.strokePath();
     }
 
-    // Walls
-    g.fillStyle(0x5a5a6e);
-    g.lineStyle(1, 0x7a7a8e);
+    // Walls — dark wood blocks with top-left highlight edge
     for (const w of this.courseData.walls) {
-      g.fillRect(w.x - w.width / 2, w.y - w.height / 2, w.width, w.height);
-      g.strokeRect(w.x - w.width / 2, w.y - w.height / 2, w.width, w.height);
+      const wx = w.x - w.width / 2;
+      const wy = w.y - w.height / 2;
+      g.fillStyle(0x5a3015);
+      g.fillRect(wx, wy, w.width, w.height);
+      g.lineStyle(2, 0x7a5035);
+      g.beginPath(); g.moveTo(wx, wy); g.lineTo(wx + w.width, wy); g.strokePath();
+      g.beginPath(); g.moveTo(wx, wy); g.lineTo(wx, wy + w.height); g.strokePath();
     }
 
-    // Tee
-    g.fillStyle(0xc4a45a);
-    g.fillRect(this.courseData.tee.x - 5, this.courseData.tee.y - 5, 10, 10);
+    // Tee — circle marker
+    g.fillStyle(0xd4b45a);
+    g.lineStyle(1, 0xa08040);
+    g.fillCircle(this.courseData.tee.x, this.courseData.tee.y, 5);
+    g.strokeCircle(this.courseData.tee.x, this.courseData.tee.y, 5);
 
-    // Hole + flag
-    g.fillStyle(0x0a0a0a);
-    g.fillCircle(this.courseData.hole.x, this.courseData.hole.y, this.courseData.hole.visualRadius);
+    // Hole cup + flag
+    const hx = this.courseData.hole.x;
+    const hy = this.courseData.hole.y;
+    const hr = this.courseData.hole.visualRadius;
+    g.fillStyle(0x0a1208);
+    g.fillCircle(hx, hy, hr);
+    g.lineStyle(8, 0x222222);
+    g.strokeCircle(hx, hy, hr + 1);
     g.lineStyle(1, 0xcccccc);
-    g.beginPath(); g.moveTo(this.courseData.hole.x, this.courseData.hole.y); g.lineTo(this.courseData.hole.x, this.courseData.hole.y - 16); g.strokePath();
+    g.beginPath(); g.moveTo(hx, hy); g.lineTo(hx, hy - 16); g.strokePath();
     g.fillStyle(0xcc4444);
-    g.fillTriangle(this.courseData.hole.x, this.courseData.hole.y - 16, this.courseData.hole.x + 6, this.courseData.hole.y - 13, this.courseData.hole.x, this.courseData.hole.y - 10);
+    g.fillTriangle(hx, hy - 16, hx + 7, hy - 13, hx, hy - 10);
 
-    // Ball
+    // Ball with drop shadow
     if (this.ball) {
-      g.fillStyle(0xf0f0f0); g.lineStyle(1, 0x888888);
-      g.fillCircle(this.ball.position.x, this.ball.position.y, 4);
-      g.strokeCircle(this.ball.position.x, this.ball.position.y, 4);
+      const bx = this.ball.position.x;
+      const by = this.ball.position.y;
+      g.fillStyle(0x000000, 0.25);
+      g.fillCircle(bx + 2, by + 2, 4);
+      g.fillStyle(0xf0f0f0);
+      g.lineStyle(1, 0xaaaaaa);
+      g.fillCircle(bx, by, 4);
+      g.strokeCircle(bx, by, 4);
     }
   }
 
@@ -376,15 +401,14 @@ export class GameScene extends Phaser.Scene {
     this.strokeText.setText(`Stroke ${this.strokeCount}`);
 
     const impulse = powerToImpulse(power);
-    this.ball.velocity.x = Math.cos(angle) * impulse;
-    this.ball.velocity.y = Math.sin(angle) * impulse;
+    applyVelocity(this.ball, Math.cos(angle) * impulse, Math.sin(angle) * impulse);
 
     // Broadcast shot to server
     socket.emit('message', {
       type: 'shot_taken',
       shot: {
         playerId: localPlayerId,
-        playerName: '',
+        playerName: playerList.find(p => p.id === localPlayerId)?.name ?? 'Player',
         ballOrigin: { x: this.ball.position.x, y: this.ball.position.y },
         angle,
         power,
