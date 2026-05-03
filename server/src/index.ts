@@ -1,5 +1,35 @@
-import { createServer } from 'node:http';
+import { createServer, IncomingMessage, ServerResponse } from 'node:http';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { join, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+const STATIC_DIR = join(__dirname, '../../client/dist');
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css',
+  '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
+};
+
+function serveStatic(req: IncomingMessage, res: ServerResponse): boolean {
+  if (!existsSync(STATIC_DIR)) return false;
+  const urlPath = (req.url?.split('?')[0] ?? '/');
+  if (urlPath.startsWith('/socket.io')) return false;
+  const target = urlPath === '/' ? '/index.html' : urlPath;
+  const filePath = join(STATIC_DIR, target);
+  if (!filePath.startsWith(STATIC_DIR)) return false; // path traversal guard
+  if (existsSync(filePath) && statSync(filePath).isFile()) {
+    res.setHeader('Content-Type', MIME[extname(filePath)] ?? 'application/octet-stream');
+    res.end(readFileSync(filePath));
+    return true;
+  }
+  // SPA fallback
+  const index = join(STATIC_DIR, 'index.html');
+  if (existsSync(index)) { res.setHeader('Content-Type', 'text/html'); res.end(readFileSync(index)); return true; }
+  return false;
+}
 import type { ClientMessage, Player, ScoreEntry, RoomState } from 'shared';
 import {
   shotMessageSchema,
@@ -8,7 +38,7 @@ import {
   joinRoomSchema,
 } from 'shared';
 
-const httpServer = createServer();
+const httpServer = createServer((req, res) => { serveStatic(req, res); });
 const io = new Server(httpServer, {
   cors: { origin: '*' }, // MVP — tighten for production
 });

@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'server/**'
+      - 'client/**'
+      - 'shared/**'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
@@ -41,7 +43,8 @@ jobs:
       - name: Build and push image
         uses: docker/build-push-action@v5
         with:
-          context: ./server
+          context: .
+          file: ./server/Dockerfile
           push: true
           tags: |
             ghcr.io/${{ steps.image-name.outputs.name }}:latest
