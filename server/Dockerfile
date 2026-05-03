@@ -4,7 +4,6 @@ COPY package.json package-lock.json* ./
 COPY shared/ ./shared/
 COPY client/ ./client/
 RUN npm ci --workspace=client --workspace=shared
-RUN npm run build -w shared
 RUN npm run build -w client
 
 FROM node:22-alpine
