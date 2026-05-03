@@ -30,8 +30,7 @@ export class GameScene extends Phaser.Scene {
   private aimStart = new Phaser.Math.Vector2();
   private aimCurrent = new Phaser.Math.Vector2();
   private graphics!: Phaser.GameObjects.Graphics;
-  private pmBg!: Phaser.GameObjects.Graphics;
-  private pmFill!: Phaser.GameObjects.Graphics;
+  private aimLineGfx!: Phaser.GameObjects.Graphics;
   private holeText!: Phaser.GameObjects.Text;
   private strokeText!: Phaser.GameObjects.Text;
   private holeDone = false;
@@ -87,8 +86,7 @@ export class GameScene extends Phaser.Scene {
     cam.centerOn(this.courseData.worldWidth / 2, this.courseData.worldHeight / 2);
 
     this.graphics = this.add.graphics();
-    this.pmBg = this.add.graphics();
-    this.pmFill = this.add.graphics();
+    this.aimLineGfx = this.add.graphics();
 
     this.buildCourse();
 
@@ -439,16 +437,21 @@ export class GameScene extends Phaser.Scene {
     const ptr = this.input.activePointer;
     if (!this.ball) return;
 
-    // Convert screen coords to world coords
+    this.aimLineGfx.clear();
+
     const worldPtr = this.cameras.main.getWorldPoint(ptr.x, ptr.y);
 
-    // Distance from pointer (world) to own ball
     const ballDist = Math.sqrt(
       (worldPtr.x - this.ball.position.x) ** 2 + (worldPtr.y - this.ball.position.y) ** 2
     );
 
+    const BALL_CLICK_RADIUS = 35;
+    const MIN_SHOT_DIST = 12;
+    const MIN_LINE_DIST = 8;
+    const MAX_DRAG_BASE = 200;
+
     if (ptr.isDown && !this.isAiming && !this.isPanning) {
-      if (ballDist < 20 && this.stillFrames >= 60) {
+      if (ballDist < BALL_CLICK_RADIUS && this.stillFrames >= 60) {
         this.isAiming = true;
         this.aimStart.set(worldPtr.x, worldPtr.y);
       } else {
@@ -463,18 +466,23 @@ export class GameScene extends Phaser.Scene {
       const dx = this.ball.position.x - this.aimCurrent.x;
       const dy = this.ball.position.y - this.aimCurrent.y;
       const dragDist = Math.sqrt(dx * dx + dy * dy);
-      const maxDrag = 200 / this.camZoom;
+      const maxDrag = MAX_DRAG_BASE / this.camZoom;
       const power = Math.min(dragDist / maxDrag, 1);
 
-      const g = this.graphics;
-      const steps = Math.floor(dragDist / 4);
-      g.fillStyle(0x4ecdc4, 0.6);
-      for (let i = 0; i < steps; i += 2) {
-        const t = (i / steps);
-        g.fillRect(this.ball.position.x - dx * t - 1, this.ball.position.y - dy * t - 1, 2, 2);
-      }
+      if (dragDist >= MIN_LINE_DIST) {
+        const angle = Math.atan2(dy, dx);
+        const g = this.aimLineGfx;
+        const maxDots = 40;
+        const dotSpacing = 5;
+        const dotCount = Math.floor(power * maxDots);
 
-      this.drawPowerMeter(power);
+        g.fillStyle(0x4ecdc4, 0.7);
+        for (let i = 0; i < dotCount; i++) {
+          const px = this.ball.position.x + Math.cos(angle) * i * dotSpacing;
+          const py = this.ball.position.y + Math.sin(angle) * i * dotSpacing;
+          g.fillRect(px - 1.5, py - 1.5, 3, 3);
+        }
+      }
     }
 
     if (ptr.isDown && this.isPanning) {
@@ -487,15 +495,15 @@ export class GameScene extends Phaser.Scene {
 
     if (!ptr.isDown && this.isAiming) {
       this.isAiming = false;
-      this.pmBg.clear(); this.pmFill.clear();
+      this.aimLineGfx.clear();
       if (!this.ball) return;
 
       const dx = this.ball.position.x - this.aimCurrent.x;
       const dy = this.ball.position.y - this.aimCurrent.y;
       const dragDist = Math.sqrt(dx * dx + dy * dy);
-      if (dragDist < 5) return;
+      if (dragDist < MIN_SHOT_DIST) return;
 
-      const maxDrag = 200 / this.camZoom;
+      const maxDrag = MAX_DRAG_BASE / this.camZoom;
       const power = Math.min(dragDist / maxDrag, 1);
       const angle = Math.atan2(dy, dx);
 
@@ -504,23 +512,6 @@ export class GameScene extends Phaser.Scene {
 
     if (!ptr.isDown && this.isPanning) {
       this.isPanning = false;
-    }
-  }
-
-  private drawPowerMeter(power: number) {
-    const sw = 14, sh = 14, gap = 2, total = 8;
-    const totalW = total * (sw + gap) - gap;
-    const px = (this.cameras.main.width - totalW) / 2;
-    const py = this.cameras.main.height - 48;
-    this.pmBg.clear(); this.pmFill.clear();
-    for (let i = 0; i < total; i++) {
-      this.pmBg.fillStyle(0x2a2a3e);
-      this.pmBg.fillRect(px + i * (sw + gap), py, sw, sh);
-    }
-    const filled = Math.floor(power * total);
-    for (let i = 0; i < filled; i++) {
-      this.pmFill.fillStyle(0xf2994a);
-      this.pmFill.fillRect(px + i * (sw + gap), py, sw, sh);
     }
   }
 
