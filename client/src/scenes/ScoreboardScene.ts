@@ -36,12 +36,12 @@ export class ScoreboardScene extends Phaser.Scene {
     const title = this.isFinal ? 'FINAL SCORES' : 'HOLE COMPLETE';
     this.add.text(cx, topY, title, {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
-      fontSize: '14px',
+      fontSize: '18px',
       color: '#6fcf97',
     }).setOrigin(0.5);
 
-    let y = topY + 50;
-    const mono = { fontFamily: '"Courier New", monospace', fontSize: '14px', color: '#e0e0e0' };
+    let y = topY + 56;
+    const mono = { fontFamily: '"Courier New", monospace', fontSize: '16px', color: '#e0e0e0' };
     const muted = { ...mono, color: '#888888' };
 
     const sorted = [...this.scoreData].sort((a, b) => a.strokes - b.strokes);
@@ -57,18 +57,18 @@ export class ScoreboardScene extends Phaser.Scene {
       this.add.text(cx - 160, y, `${prefix}${entry.name}`, {
         ...(isMe ? mono : muted),
         fontFamily: '"Courier New", monospace',
-        fontSize: '14px',
+        fontSize: '16px',
       }).setOrigin(0, 0.5);
 
       this.add.text(cx + 100, y, `${entry.strokes}`, {
-        ...mono, fontSize: '14px',
+        ...mono, fontSize: '16px',
       }).setOrigin(0.5);
 
       this.add.text(cx + 160, y, `(${parStr})`, {
-        ...mono, fontSize: '12px', color: parColor,
+        ...mono, fontSize: '14px', color: parColor,
       }).setOrigin(0.5);
 
-      y += 28;
+      y += 34;
     });
 
     const btnY = this.isFinal ? y + 30 : y + 10;
@@ -76,10 +76,10 @@ export class ScoreboardScene extends Phaser.Scene {
     if (this.isFinal) {
       const btn = this.add.text(cx, btnY, 'BACK TO LOBBY', {
         fontFamily: '"Courier New", monospace',
-        fontSize: '11px',
+        fontSize: '14px',
         color: '#4ecdc4',
         backgroundColor: '#2a2a3e',
-        padding: { x: 20, y: 10 },
+        padding: { x: 24, y: 12 },
       }).setOrigin(0.5).setInteractive({ useHandCursor: true });
 
       btn.on('pointerover', () => btn.setStyle({ color: '#e0e0e0' }));
@@ -90,10 +90,10 @@ export class ScoreboardScene extends Phaser.Scene {
     } else {
       const readyBtn = this.add.text(cx, btnY, 'I\'M READY FOR NEXT HOLE', {
         fontFamily: '"Courier New", monospace',
-        fontSize: '11px',
+        fontSize: '14px',
         color: '#4ecdc4',
         backgroundColor: '#2a2a3e',
-        padding: { x: 20, y: 10 },
+        padding: { x: 24, y: 12 },
       }).setOrigin(0.5).setInteractive({ useHandCursor: true });
 
       readyBtn.on('pointerover', () => readyBtn.setStyle({ color: '#e0e0e0' }));

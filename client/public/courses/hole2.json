@@ -1,24 +1,19 @@
 {
-  "name": "Hole 2 – The Zigzag",
+  "name": "Hole 2 – The Slalom",
   "par": 3,
-  "worldWidth": 700,
-  "worldHeight": 760,
-  "tee": { "x": 200, "y": 680 },
-  "hole": { "x": 500, "y": 80, "visualRadius": 7, "triggerRadius": 12 },
+  "worldWidth": 640,
+  "worldHeight": 770,
+  "tee": { "x": 320, "y": 710 },
+  "hole": { "x": 320, "y": 60, "visualRadius": 7, "triggerRadius": 12 },
   "walls": [
-    { "x": 350, "y": 200, "width": 200, "height": 16 },
-    { "x": 200, "y": 340, "width": 16, "height": 80 },
-    { "x": 400, "y": 460, "width": 160, "height": 16 },
-    { "x": 300, "y": 580, "width": 16, "height": 70 }
+    { "x": 240, "y": 220, "width": 200, "height": 16 },
+    { "x": 400, "y": 380, "width": 200, "height": 16 },
+    { "x": 240, "y": 540, "width": 200, "height": 16 }
   ],
   "fairway": {
     "vertices": [
-      { "x": 60, "y": 40 }, { "x": 460, "y": 40 },
-      { "x": 460, "y": 260 }, { "x": 260, "y": 260 },
-      { "x": 260, "y": 400 }, { "x": 480, "y": 400 },
-      { "x": 480, "y": 520 }, { "x": 320, "y": 520 },
-      { "x": 320, "y": 720 }, { "x": 620, "y": 720 },
-      { "x": 620, "y": 160 }, { "x": 60, "y": 160 }
+      { "x": 70, "y": 30 }, { "x": 570, "y": 30 },
+      { "x": 570, "y": 730 }, { "x": 70, "y": 730 }
     ]
   }
 }

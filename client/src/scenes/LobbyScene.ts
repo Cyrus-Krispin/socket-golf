@@ -18,13 +18,13 @@ export class LobbyScene extends Phaser.Scene {
 
     const title = this.add.text(cx(), cy() - 80, 'SOCKET GOLF', {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
-      fontSize: '16px',
+      fontSize: '20px',
       color: '#4ecdc4',
     }).setOrigin(0.5);
 
-    this.add.text(cx(), cy() - 50, 'no login. no accounts. just golf.', {
+    this.add.text(cx(), cy() - 46, 'no login. no accounts. just golf.', {
       fontFamily: '"Courier New", monospace',
-      fontSize: '10px',
+      fontSize: '13px',
       color: '#888888',
     }).setOrigin(0.5).setScrollFactor(0);
 
@@ -53,27 +53,27 @@ export class LobbyScene extends Phaser.Scene {
         font-family:"Courier New",monospace;color:#e0e0e0;pointer-events:none}
       #lobby-ui>*{pointer-events:auto}
       #lobby-ui input{background:#16213e;border:1px solid #555;color:#e0e0e0;
-        font-family:"Courier New",monospace;font-size:14px;padding:8px 12px;
+        font-family:"Courier New",monospace;font-size:16px;padding:10px 14px;
         text-align:center;outline:none}
       #lobby-ui input:focus{border-color:#4ecdc4}
       #lobby-ui button{background:#2a2a3e;border:1px solid #555;color:#e0e0e0;
-        font-family:"Courier New",monospace;font-size:11px;padding:10px 24px;
+        font-family:"Courier New",monospace;font-size:14px;padding:12px 28px;
         cursor:pointer;letter-spacing:2px;text-transform:uppercase}
       #lobby-ui button:hover{border-color:#4ecdc4}
       #lobby-ui button:disabled,.btn-disabled{opacity:0.4;cursor:default;border-color:#444!important}
       #lobby-ui button:focus{outline:2px solid #4ecdc4}
-      .ls{border:1px solid #333;background:#222244;padding:16px;
-        display:flex;flex-direction:column;align-items:center;gap:8px}
-      .ll{font-size:11px;color:#888}
-      .ld{color:#555;font-size:10px}
+      .ls{border:1px solid #333;background:#222244;padding:20px;
+        display:flex;flex-direction:column;align-items:center;gap:12px}
+      .ll{font-size:13px;color:#888}
+      .ld{color:#555;font-size:13px}
       #room-code-display{font-size:18px;color:#6fcf97;letter-spacing:4px;display:none}
-      #error-msg{color:#eb5757;font-size:11px;display:none;min-height:16px}
-      #player-list{font-size:11px;color:#888;display:none;text-align:center}
+      #error-msg{color:#eb5757;font-size:13px;display:none;min-height:18px}
+      #player-list{font-size:14px;color:#888;display:none;text-align:center}
       #name-input{width:170px;letter-spacing:1px}
       #code-input{width:100px;letter-spacing:4px}
-      .start-btn{font-size:14px!important;padding:12px 32px!important;color:#6fcf97!important}
+      .start-btn{font-size:16px!important;padding:14px 36px!important;color:#6fcf97!important}
       .start-btn-hidden{display:none!important}
-      .wait-msg{font-size:11px;color:#888;display:none}
+      .wait-msg{font-size:13px;color:#888;display:none}
     </style>
     <div class="ls">
       <input id="name-input" type="text" maxlength="12" placeholder="Your name" aria-label="Your name" autocomplete="off">
@@ -202,7 +202,9 @@ export class LobbyScene extends Phaser.Scene {
   }
 
   private launchGame(holeNumber: number) {
-    this.domContainer.remove();
+    if (this.domContainer && this.domContainer.parentNode) {
+      this.domContainer.remove();
+    }
     this.scene.start('GameScene', { holeIndex: (holeNumber || 1) - 1 });
   }
 }

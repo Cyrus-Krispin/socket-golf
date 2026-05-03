@@ -1,23 +1,25 @@
 {
-  "name": "Hole 3 – The Corridor",
+  "name": "Hole 3 – The Funnel",
   "par": 4,
   "worldWidth": 640,
-  "worldHeight": 800,
-  "tee": { "x": 320, "y": 720 },
-  "hole": { "x": 320, "y": 80, "visualRadius": 7, "triggerRadius": 12 },
+  "worldHeight": 810,
+  "tee": { "x": 320, "y": 760 },
+  "hole": { "x": 320, "y": 50, "visualRadius": 7, "triggerRadius": 12 },
   "walls": [
-    { "x": 150, "y": 200, "width": 16, "height": 120 },
-    { "x": 490, "y": 300, "width": 16, "height": 120 },
-    { "x": 150, "y": 420, "width": 16, "height": 120 },
-    { "x": 490, "y": 520, "width": 16, "height": 120 },
-    { "x": 320, "y": 600, "width": 100, "height": 16 }
+    { "x": 160, "y": 180, "width": 100, "height": 16 },
+    { "x": 480, "y": 180, "width": 100, "height": 16 },
+    { "x": 220, "y": 360, "width": 16, "height": 90 },
+    { "x": 420, "y": 360, "width": 16, "height": 90 },
+    { "x": 320, "y": 540, "width": 100, "height": 16 },
+    { "x": 180, "y": 660, "width": 120, "height": 16 }
   ],
   "fairway": {
     "vertices": [
-      { "x": 80, "y": 40 }, { "x": 560, "y": 40 },
-      { "x": 560, "y": 160 }, { "x": 240, "y": 160 },
-      { "x": 240, "y": 520 }, { "x": 560, "y": 520 },
-      { "x": 560, "y": 760 }, { "x": 80, "y": 760 }
+      { "x": 60, "y": 30 }, { "x": 580, "y": 30 },
+      { "x": 580, "y": 280 }, { "x": 190, "y": 280 },
+      { "x": 190, "y": 440 }, { "x": 450, "y": 440 },
+      { "x": 450, "y": 580 }, { "x": 60, "y": 580 },
+      { "x": 60, "y": 780 }, { "x": 580, "y": 780 }
     ]
   }
 }

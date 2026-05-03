@@ -78,11 +78,13 @@ export class GameScene extends Phaser.Scene {
     this.courseData = this.cache.json.get(`hole${this.holeNumber}`) as CourseData;
     this.maxStrokes = this.courseData.par * 2 + 3;
 
-    // Camera setup — no bounds, free pan/zoom
+    // Camera setup — fit entire hole in viewport, centered, no bounds
     const cam = this.cameras.main;
-    cam.centerOn(this.courseData.tee.x, this.courseData.tee.y);
-    this.camZoom = 1;
+    const fitX = this.cameras.main.width / this.courseData.worldWidth;
+    const fitY = this.cameras.main.height / this.courseData.worldHeight;
+    this.camZoom = Phaser.Math.Clamp(Math.min(fitX, fitY) * 0.88, 0.3, 1.5);
     cam.setZoom(this.camZoom);
+    cam.centerOn(this.courseData.worldWidth / 2, this.courseData.worldHeight / 2);
 
     this.graphics = this.add.graphics();
     this.pmBg = this.add.graphics();
@@ -128,25 +130,25 @@ export class GameScene extends Phaser.Scene {
     const ch = () => this.cameras.main.height;
     const mono = { fontFamily: '"Courier New", monospace', fontSize: '12px', color: '#e0e0e0' };
     this.holeText = this.add.text(10, 8, `HOLE ${this.holeNumber}/3  Par ${this.courseData.par}`, {
-      ...mono, fontSize: '10px', color: '#888',
+      ...mono, fontSize: '13px', color: '#888',
     }).setScrollFactor(0);
 
     this.strokeText = this.add.text(0, 8, 'Stroke 0', {
-      ...mono, fontSize: '10px', color: '#888',
+      ...mono, fontSize: '13px', color: '#888',
     }).setOrigin(1, 0).setScrollFactor(0);
 
     // Waiting overlay
     this.waitingOverlay = this.add.text(0, 0, '', {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
-      fontSize: '12px', color: '#e0e0e0', backgroundColor: '#000000aa',
-      padding: { x: 16, y: 10 },
+      fontSize: '16px', color: '#e0e0e0', backgroundColor: '#000000aa',
+      padding: { x: 20, y: 12 },
     }).setOrigin(0.5).setDepth(100).setScrollFactor(0).setAlpha(0);
 
     // Disconnect overlay
     this.disconnectOverlay = this.add.text(0, 0, '', {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
-      fontSize: '12px', color: '#eb5757', backgroundColor: '#000000cc',
-      padding: { x: 16, y: 10 },
+      fontSize: '16px', color: '#eb5757', backgroundColor: '#000000cc',
+      padding: { x: 20, y: 12 },
     }).setOrigin(0.5).setDepth(100).setScrollFactor(0).setAlpha(0);
 
     this.updateHUDPositions();
@@ -205,10 +207,10 @@ export class GameScene extends Phaser.Scene {
 
     const nametag = this.add.text(0, 0, playerName, {
       fontFamily: '"Courier New", monospace',
-      fontSize: '10px',
+      fontSize: '12px',
       color: '#f0c060',
       backgroundColor: '#00000088',
-      padding: { x: 3, y: 1 },
+      padding: { x: 6, y: 2 },
     }).setOrigin(0.5, 1).setDepth(90);
 
     this.ghostBalls.set(playerId, { body: gb, nametag, target: null });
