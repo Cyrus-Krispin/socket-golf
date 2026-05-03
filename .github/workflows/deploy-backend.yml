@@ -92,7 +92,7 @@ jobs:
               --name socket-golf-server \
               --restart unless-stopped \
               --env-file /opt/socket-golf/.env \
-              -p 127.0.0.1:3001:3001 \
+              -p 0.0.0.0:3001:3001 \
               "${SHA_IMAGE}"
 
             # Wait for server to be ready (container running check)
@@ -111,7 +111,7 @@ jobs:
                     --name socket-golf-server \
                     --restart unless-stopped \
                     --env-file /opt/socket-golf/.env \
-                    -p 127.0.0.1:3001:3001 \
+                    -p 0.0.0.0:3001:3001 \
                     "${ROLLBACK_IMAGE}"
                   echo "Rolled back to ${ROLLBACK_IMAGE}"
                 fi
