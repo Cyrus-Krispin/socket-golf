@@ -8,7 +8,12 @@ import {
   joinRoomSchema,
 } from 'shared';
 
-const httpServer = createServer();
+const httpServer = createServer((req, res) => {
+  if (req.url === '/health' && req.method === 'GET') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
+  }
+});
 const io = new Server(httpServer, {
   cors: { origin: '*' }, // MVP — tighten for production
 });
