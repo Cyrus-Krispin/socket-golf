@@ -6,8 +6,7 @@ export let localPlayerId: string | null = null;
 export let roomCode: string | null = null;
 export let playerList: Player[] = [];
 export let currentHole = 0;
-export let activePlayerId: string | null = null;
-export let isMyTurn = false;
+export let creatorId: string | null = null;
 
 export function connectSocket() {
   if (socket?.connected) return;
@@ -19,11 +18,11 @@ export function setLocalPlayer(id: string, code: string) {
   roomCode = code;
 }
 
-export function updatePlayers(players: Player[]) {
+export function updatePlayers(players: Player[], cId?: string) {
   playerList = players;
+  if (cId) creatorId = cId;
 }
 
-export function setTurn(activeId: string) {
-  activePlayerId = activeId;
-  isMyTurn = activeId === localPlayerId;
+export function isCreator(): boolean {
+  return localPlayerId !== null && localPlayerId === creatorId;
 }

@@ -16,18 +16,19 @@ const httpServer = createServer((req, res) => {
   }
 });
 const io = new Server(httpServer, {
-  cors: { origin: '*' }, // MVP — tighten for production
+  cors: { origin: '*' },
 });
 
 // ---- In-memory state ----
 interface Room {
   code: string;
+  creatorId: string;
   players: Map<string, Player>;
   maxPlayers: number;
   scores: Map<string, number[]>; // playerId → [hole1Strokes, hole2Strokes, ...]
-  currentHole: number;
-  turnOrder: string[];       // playerId array
-  activeTurnIndex: number;
+  currentHole: number;       // 0 = waiting, 1-3 = playing
+  holeCompleted: Set<string>; // players who finished current hole
+  readyForNext: Set<string>;  // players ready for next hole
   socketMap: Map<string, string>; // socketId → playerId
 }
 
@@ -35,7 +36,7 @@ const rooms = new Map<string, Room>();
 
 // ---- Utilities ----
 function generateCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No I,O,0,1
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
   for (let i = 0; i < 6; i++) {
     code += chars[Math.floor(Math.random() * chars.length)];
@@ -43,29 +44,8 @@ function generateCode(): string {
   return code;
 }
 
-function buildRoomState(room: Room): RoomState {
-  const scores: ScoreEntry[] = [];
-  for (const [playerId, strokeList] of room.scores) {
-    const player = room.players.get(playerId);
-    if (!player) continue;
-    const total = strokeList.reduce((a, b) => a + b, 0);
-    const currentStroke = strokeList[room.currentHole - 1] ?? 0;
-    const totalPar = room.currentHole * 3; // simplified: par 3 per hole
-    scores.push({
-      playerId,
-      name: player.name,
-      strokes: currentStroke,
-      relativeToPar: total - totalPar,
-    });
-  }
-  return {
-    roomCode: room.code,
-    players: Array.from(room.players.values()),
-    currentHole: room.currentHole,
-    activePlayerIndex: room.activeTurnIndex,
-    scores,
-    maxPlayers: room.maxPlayers,
-  };
+function buildPlayerList(room: Room): Player[] {
+  return Array.from(room.players.values());
 }
 
 function broadcast(room: Room, msg: object, excludeSocketId?: string) {
@@ -78,6 +58,35 @@ function broadcast(room: Room, msg: object, excludeSocketId?: string) {
 
 function broadcastToAll(room: Room, msg: object) {
   broadcast(room, msg);
+}
+
+function buildRoomState(room: Room): RoomState {
+  const scores: ScoreEntry[] = [];
+  for (const [playerId, strokeList] of room.scores) {
+    const player = room.players.get(playerId);
+    if (!player) continue;
+    const total = strokeList.reduce((a, b) => a + b, 0);
+    const totalPar = room.currentHole * 3;
+    scores.push({
+      playerId,
+      name: player.name,
+      strokes: strokeList[room.currentHole - 1] ?? 0,
+      relativeToPar: total - totalPar,
+    });
+  }
+  return {
+    roomCode: room.code,
+    players: Array.from(room.players.values()),
+    currentHole: room.currentHole,
+    scores,
+    maxPlayers: room.maxPlayers,
+    creatorId: room.creatorId,
+  };
+}
+
+function emitPlayerList(room: Room) {
+  const players = buildPlayerList(room);
+  broadcastToAll(room, { type: 'player_list', players, creatorId: room.creatorId });
 }
 
 // ---- Socket.io ----
@@ -94,12 +103,13 @@ io.on('connection', (socket) => {
           const playerId = crypto.randomUUID();
           const room: Room = {
             code,
+            creatorId: playerId,
             players: new Map([[playerId, { id: playerId, name: playerName, connected: true }]]),
             maxPlayers,
             scores: new Map([[playerId, []]]),
             currentHole: 0,
-            turnOrder: [playerId],
-            activeTurnIndex: 0,
+            holeCompleted: new Set(),
+            readyForNext: new Set(),
             socketMap: new Map([[socket.id, playerId]]),
           };
           rooms.set(code, room);
@@ -124,7 +134,6 @@ io.on('connection', (socket) => {
           const playerId = crypto.randomUUID();
           room.players.set(playerId, { id: playerId, name: playerName, connected: true });
           room.scores.set(playerId, []);
-          room.turnOrder.push(playerId);
           room.socketMap.set(socket.id, playerId);
           currentRoom = room;
           currentPlayerId = playerId;
@@ -133,47 +142,42 @@ io.on('connection', (socket) => {
             type: 'room_joined',
             roomCode,
             playerId,
-            players: Array.from(room.players.values()),
+            players: buildPlayerList(room),
+            creatorId: room.creatorId,
           });
-          broadcast(room, { type: 'player_joined', playerId, playerName }, socket.id);
 
-          // Auto-start when 2+ players
-          if (room.players.size >= 2 && room.currentHole === 0) {
-            room.currentHole = 1;
-            const firstPlayerId = room.turnOrder[0];
-            const firstPlayer = room.players.get(firstPlayerId)!;
-            room.activeTurnIndex = 0;
-            setTimeout(() => {
-              broadcastToAll(room!, {
-                type: 'turn_started',
-                playerId: firstPlayerId,
-                playerName: firstPlayer.name,
-                holeNumber: 1,
-              });
-            }, 1000);
-          }
+          emitPlayerList(room);
           break;
         }
 
         case 'start_game': {
-          if (!currentRoom || currentRoom.players.size < 2) break;
+          if (!currentRoom) break;
+          if (currentPlayerId !== currentRoom.creatorId) {
+            socket.emit('message', { type: 'error', message: 'Only the room creator can start the game' });
+            break;
+          }
+          if (currentRoom.players.size < 2) {
+            socket.emit('message', { type: 'error', message: 'Need at least 2 players' });
+            break;
+          }
           currentRoom.currentHole = 1;
-          const firstPlayerId = currentRoom.turnOrder[0];
-          const firstPlayer = currentRoom.players.get(firstPlayerId)!;
-          currentRoom.activeTurnIndex = 0;
-          broadcastToAll(currentRoom, {
-            type: 'turn_started',
-            playerId: firstPlayerId,
-            playerName: firstPlayer.name,
-            holeNumber: 1,
-          });
+          currentRoom.holeCompleted.clear();
+          currentRoom.readyForNext.clear();
+          broadcastToAll(currentRoom, { type: 'game_started', holeNumber: 1 });
           break;
         }
 
         case 'shot_taken': {
           if (!currentRoom || !currentPlayerId) break;
           shotMessageSchema.parse(raw.shot);
-          broadcastToAll(currentRoom, { type: 'shot_taken', shot: raw.shot });
+          broadcast(currentRoom, { type: 'shot_taken', shot: raw.shot }, socket.id);
+          break;
+        }
+
+        case 'ball_state': {
+          if (!currentRoom || !currentPlayerId) break;
+          const { playerId, x, y, vx, vy } = raw;
+          broadcast(currentRoom, { type: 'ball_state', playerId, x, y, vx, vy }, socket.id);
           break;
         }
 
@@ -182,51 +186,50 @@ io.on('connection', (socket) => {
           holeCompletedSchema.parse(raw);
           const { playerId, strokes, par } = raw;
           const existingScores = currentRoom.scores.get(playerId) ?? [];
-          // currentHole is 1-indexed; store at index currentHole - 1
           existingScores[currentRoom.currentHole - 1] = strokes;
           currentRoom.scores.set(playerId, existingScores);
+          currentRoom.holeCompleted.add(playerId);
 
           broadcastToAll(currentRoom, { type: 'hole_completed', playerId, strokes, par });
 
-          // Advance turn
-          currentRoom.activeTurnIndex++;
-          if (currentRoom.activeTurnIndex >= currentRoom.turnOrder.length) {
-            // All players done with this hole
-            currentRoom.activeTurnIndex = 0;
+          // Check if all connected players done
+          const connectedHole = Array.from(currentRoom.players.values()).filter(p => p.connected).length;
+          if (currentRoom.holeCompleted.size >= connectedHole) {
+            currentRoom.holeCompleted.clear();
 
             if (currentRoom.currentHole >= 3) {
-              // Game over
-              const state = buildRoomState(currentRoom);
-              const finalScores = state.scores.map(s => ({
-                playerId: s.playerId,
-                name: s.name,
-                total: currentRoom!.scores.get(s.playerId)!.reduce((a, b) => a + b, 0),
-                relativeToPar: s.relativeToPar,
-              }));
+              const finalScores = Array.from(currentRoom.scores.entries()).map(([pid, scores]) => {
+                const player = currentRoom!.players.get(pid);
+                const total = scores.reduce((a, b) => a + b, 0);
+                const totalPar = 3 * 3;
+                return {
+                  playerId: pid,
+                  name: player?.name ?? 'Player',
+                  total,
+                  relativeToPar: total - totalPar,
+                };
+              });
               broadcastToAll(currentRoom, { type: 'game_ended', finalScores });
             } else {
-              // Next hole
-              currentRoom.currentHole++;
               const state = buildRoomState(currentRoom);
               broadcastToAll(currentRoom, { type: 'score_update', scores: state.scores });
-
-              const nextPlayerId = currentRoom.turnOrder[0];
-              const nextPlayer = currentRoom.players.get(nextPlayerId)!;
-              broadcastToAll(currentRoom, {
-                type: 'turn_started',
-                playerId: nextPlayerId,
-                playerName: nextPlayer.name,
-                holeNumber: currentRoom.currentHole,
-              });
             }
-          } else {
-            // Next player's turn on same hole
-            const nextPlayerId = currentRoom.turnOrder[currentRoom.activeTurnIndex];
-            const nextPlayer = currentRoom.players.get(nextPlayerId)!;
+          }
+          break;
+        }
+
+        case 'hole_ready': {
+          if (!currentRoom || !currentPlayerId) break;
+          currentRoom.readyForNext.add(currentPlayerId);
+          broadcastToAll(currentRoom, { type: 'hole_ready', playerId: currentPlayerId });
+
+          const connectedReady = Array.from(currentRoom.players.values()).filter(p => p.connected).length;
+          if (currentRoom.readyForNext.size >= connectedReady) {
+            currentRoom.readyForNext.clear();
+            currentRoom.holeCompleted.clear();
+            currentRoom.currentHole++;
             broadcastToAll(currentRoom, {
-              type: 'turn_started',
-              playerId: nextPlayerId,
-              playerName: nextPlayer.name,
+              type: 'all_ready',
               holeNumber: currentRoom.currentHole,
             });
           }
@@ -250,19 +253,42 @@ io.on('connection', (socket) => {
     const player = currentRoom.players.get(currentPlayerId);
     if (player) player.connected = false;
 
-    // If this was the active player, skip their turn
-    if (currentRoom.turnOrder[currentRoom.activeTurnIndex] === currentPlayerId) {
-      currentRoom.activeTurnIndex++;
-      if (currentRoom.activeTurnIndex < currentRoom.turnOrder.length) {
-        const nextId = currentRoom.turnOrder[currentRoom.activeTurnIndex];
-        const nextPlayer = currentRoom.players.get(nextId);
-        if (nextPlayer) {
-          broadcastToAll(currentRoom, {
-            type: 'turn_started',
-            playerId: nextId,
-            playerName: nextPlayer.name,
-            holeNumber: currentRoom.currentHole,
+    emitPlayerList(currentRoom);
+
+    // If a hole is active, auto-complete for disconnected player so game isn't blocked
+    if (currentRoom.currentHole > 0) {
+      currentRoom.holeCompleted.add(currentPlayerId);
+
+      // Check if all remaining active players are done
+      const activePlayers = new Set(
+        Array.from(currentRoom.players.entries())
+          .filter(([_, p]) => p.connected)
+          .map(([id]) => id)
+      );
+      let allDone = true;
+      for (const pid of activePlayers) {
+        if (!currentRoom.holeCompleted.has(pid)) {
+          allDone = false;
+          break;
+        }
+      }
+      if (allDone && activePlayers.size > 0) {
+        if (currentRoom.currentHole >= 3) {
+          const finalScores = Array.from(currentRoom.scores.entries()).map(([pid, scores]) => {
+            const p = currentRoom!.players.get(pid);
+            const total = scores.reduce((a, b) => a + b, 0);
+            const totalPar = 3 * 3;
+            return {
+              playerId: pid,
+              name: p?.name ?? 'Player',
+              total,
+              relativeToPar: total - totalPar,
+            };
           });
+          broadcastToAll(currentRoom, { type: 'game_ended', finalScores });
+        } else {
+          const state = buildRoomState(currentRoom);
+          broadcastToAll(currentRoom, { type: 'score_update', scores: state.scores });
         }
       }
     }
@@ -274,8 +300,9 @@ io.on('connection', (socket) => {
       if (p && !p.connected) {
         currentRoom.players.delete(currentPlayerId!);
         currentRoom.socketMap.delete(socket.id);
-        currentRoom.turnOrder = currentRoom.turnOrder.filter(id => id !== currentPlayerId);
-        broadcastToAll(currentRoom, { type: 'player_left', playerId: currentPlayerId! });
+        currentRoom.holeCompleted.delete(currentPlayerId!);
+        currentRoom.readyForNext.delete(currentPlayerId!);
+        emitPlayerList(currentRoom);
         if (currentRoom.players.size === 0) {
           rooms.delete(currentRoom.code);
         }

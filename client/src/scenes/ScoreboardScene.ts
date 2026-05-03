@@ -11,6 +11,8 @@ interface ScoreEntry {
 export class ScoreboardScene extends Phaser.Scene {
   private isFinal = false;
   private scoreData: ScoreEntry[] = [];
+  private readyPlayers = new Set<string>();
+  private myReady = false;
 
   constructor() {
     super({ key: 'ScoreboardScene' });
@@ -19,6 +21,8 @@ export class ScoreboardScene extends Phaser.Scene {
   init(data: { scores: ScoreEntry[]; isFinal: boolean }) {
     this.scoreData = data.scores || [];
     this.isFinal = data.isFinal || false;
+    this.readyPlayers.clear();
+    this.myReady = false;
   }
 
   create() {
@@ -36,7 +40,6 @@ export class ScoreboardScene extends Phaser.Scene {
     const mono = { fontFamily: '"Courier New", monospace', fontSize: '14px', color: '#e0e0e0' };
     const muted = { ...mono, color: '#888888' };
 
-    // Sort by strokes (ascending)
     const sorted = [...this.scoreData].sort((a, b) => a.strokes - b.strokes);
 
     sorted.forEach((entry, i) => {
@@ -47,11 +50,11 @@ export class ScoreboardScene extends Phaser.Scene {
       const parColor = entry.relativeToPar === 0 ? '#6fcf97' :
         entry.relativeToPar > 0 ? '#eb5757' : '#6fcf97';
 
-      this.add.text(320, y, `${prefix}${entry.name}`, {
+      this.add.text(160, y, `${prefix}${entry.name}`, {
         ...(isMe ? mono : muted),
         fontFamily: '"Courier New", monospace',
         fontSize: '14px',
-      }).setOrigin(0.5);
+      }).setOrigin(0, 0.5);
 
       this.add.text(420, y, `${entry.strokes}`, {
         ...mono, fontSize: '14px',
@@ -64,40 +67,87 @@ export class ScoreboardScene extends Phaser.Scene {
       y += 28;
     });
 
-    // Action button
-    const btnText = this.isFinal ? 'BACK TO LOBBY' : 'NEXT HOLE';
-    const btnY = y + 30;
-    const btn = this.add.text(320, btnY, btnText, {
-      fontFamily: '"Courier New", monospace',
-      fontSize: '11px',
-      color: '#4ecdc4',
-      backgroundColor: '#2a2a3e',
-      padding: { x: 20, y: 10 },
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    // Buttons
+    const btnY = this.isFinal ? y + 30 : y + 10;
 
-    btn.on('pointerover', () => btn.setStyle({ color: '#e0e0e0' }));
-    btn.on('pointerout', () => btn.setStyle({ color: '#4ecdc4' }));
-    btn.on('pointerdown', () => {
-      if (this.isFinal) {
-        this.scene.start('LobbyScene');
-      } else {
-        // Wait for turn_started to advance
-        this.scene.start('GameScene', { holeIndex: -1 }); // will be updated by turn_started
-      }
-    });
+    if (this.isFinal) {
+      const btn = this.add.text(320, btnY, 'BACK TO LOBBY', {
+        fontFamily: '"Courier New", monospace',
+        fontSize: '11px',
+        color: '#4ecdc4',
+        backgroundColor: '#2a2a3e',
+        padding: { x: 20, y: 10 },
+      }).setOrigin(0.5).setInteractive({ useHandCursor: true });
 
-    // Keyboard: Enter to continue
-    this.input.keyboard!.on('keydown-ENTER', () => {
-      if (this.isFinal) {
-        this.scene.start('LobbyScene');
-      }
-    });
+      btn.on('pointerover', () => btn.setStyle({ color: '#e0e0e0' }));
+      btn.on('pointerout', () => btn.setStyle({ color: '#4ecdc4' }));
+      btn.on('pointerdown', () => this.scene.start('LobbyScene'));
 
-    // Also listen for turn_started to auto-advance
-    socket.on('message', (msg: any) => {
-      if (msg.type === 'turn_started') {
-        this.scene.start('GameScene', { holeIndex: (msg.holeNumber || 1) - 1 });
-      }
-    });
+      this.input.keyboard!.on('keydown-ENTER', () => this.scene.start('LobbyScene'));
+    } else {
+      // Ready system for next hole
+      const readyBtn = this.add.text(320, btnY, 'I\'M READY FOR NEXT HOLE', {
+        fontFamily: '"Courier New", monospace',
+        fontSize: '11px',
+        color: '#4ecdc4',
+        backgroundColor: '#2a2a3e',
+        padding: { x: 20, y: 10 },
+      }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+
+      readyBtn.on('pointerover', () => readyBtn.setStyle({ color: '#e0e0e0' }));
+      readyBtn.on('pointerout', () => readyBtn.setStyle({ color: this.myReady ? '#6fcf97' : '#4ecdc4' }));
+
+      readyBtn.on('pointerdown', () => {
+        if (this.myReady) return;
+        this.myReady = true;
+        readyBtn.setText('\u2713 I\'M READY');
+        readyBtn.setStyle({ color: '#6fcf97' });
+        readyBtn.disableInteractive();
+        socket.emit('message', { type: 'hole_ready', playerId: localPlayerId });
+        this.updateReadyDisplay();
+      });
+
+      // Ready status display
+      this.renderReadyStatus(btnY + 40);
+
+      // Listen for ready updates
+      socket.off('message');
+      socket.on('message', (msg: any) => {
+        switch (msg.type) {
+          case 'hole_ready':
+            this.readyPlayers.add(msg.playerId);
+            this.updateReadyDisplay();
+            if (msg.playerId === localPlayerId) {
+              // Already handled above
+            }
+            break;
+          case 'all_ready':
+            this.scene.start('GameScene', { holeIndex: (msg.holeNumber || 1) - 1 });
+            break;
+        }
+      });
+    }
+  }
+
+  private renderReadyStatus(startY: number) {
+    // Remove old status text if any
+    const existing = document.getElementById('ready-status');
+    if (existing) existing.remove();
+
+    const div = document.createElement('div');
+    div.id = 'ready-status';
+    div.style.cssText = 'position:absolute;top:' + (startY + 20) + 'px;left:0;width:100%;text-align:center;font-size:11px;color:#888;pointer-events:none';
+    document.getElementById('game-container')!.appendChild(div);
+    this.updateReadyDisplay();
+  }
+
+  private updateReadyDisplay() {
+    const div = document.getElementById('ready-status');
+    if (!div) return;
+    div.innerHTML = this.scoreData.map(e => {
+      const ready = this.readyPlayers.has(e.playerId);
+      const check = ready ? '\u2713' : '\u25CB';
+      return `${e.name}: ${check}`;
+    }).join(' | ');
   }
 }

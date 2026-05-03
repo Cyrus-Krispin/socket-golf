@@ -17,6 +17,15 @@ export interface ShotMessage {
   strokeNumber: number;
 }
 
+// ---- Ball state for sync ----
+export interface BallStateMessage {
+  playerId: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+}
+
 // ---- Scores ----
 export interface ScoreEntry {
   playerId: string;
@@ -37,33 +46,38 @@ export interface RoomState {
   roomCode: string;
   players: Player[];
   currentHole: number;
-  activePlayerIndex: number;
   scores: ScoreEntry[];
   maxPlayers: number;
+  creatorId: string;
 }
 
 // ---- Server → Client messages ----
 export type ServerMessage =
   | { type: 'room_created'; roomCode: string; playerId: string }
-  | { type: 'room_joined'; roomCode: string; playerId: string; players: Player[] }
-  | { type: 'player_joined'; playerId: string; playerName: string }
-  | { type: 'player_left'; playerId: string }
+  | { type: 'room_joined'; roomCode: string; playerId: string; players: Player[]; creatorId: string }
+  | { type: 'player_joined'; playerId: string; playerName: string; players: Player[]; creatorId: string }
+  | { type: 'player_left'; playerId: string; players: Player[]; creatorId: string }
   | { type: 'shot_taken'; shot: ShotMessage }
+  | { type: 'ball_state'; playerId: string; x: number; y: number; vx: number; vy: number }
   | { type: 'hole_completed'; playerId: string; strokes: number; par: number }
   | { type: 'score_update'; scores: ScoreEntry[] }
-  | { type: 'turn_started'; playerId: string; playerName: string; holeNumber: number }
+  | { type: 'game_started'; holeNumber: number }
+  | { type: 'hole_ready'; playerId: string }
+  | { type: 'all_ready'; holeNumber: number }
   | { type: 'ball_reset'; playerId: string }
   | { type: 'game_ended'; finalScores: FinalScore[] }
-  | { type: 'room_state'; state: RoomState } // on reconnect
+  | { type: 'room_state'; state: RoomState }
   | { type: 'error'; message: string };
 
 // ---- Client → Server messages ----
 export type ClientMessage =
   | { type: 'create_room'; playerName: string; maxPlayers?: number }
   | { type: 'join_room'; roomCode: string; playerName: string }
-  | { type: 'start_game' }
+  | { type: 'start_game'; playerId: string }
   | { type: 'shot_taken'; shot: ShotMessage }
+  | { type: 'ball_state'; playerId: string; x: number; y: number; vx: number; vy: number }
   | { type: 'hole_completed'; playerId: string; strokes: number; par: number }
+  | { type: 'hole_ready'; playerId: string }
   | { type: 'ball_reset'; playerId: string };
 
 // ---- Zod schemas for server-side validation ----

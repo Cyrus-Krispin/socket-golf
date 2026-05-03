@@ -1,10 +1,10 @@
 import Phaser from 'phaser';
-import { connectSocket, socket, setLocalPlayer, updatePlayers, setTurn, playerList } from '../network';
+import { connectSocket, socket, setLocalPlayer, updatePlayers, playerList, creatorId, localPlayerId } from '../network';
 
 export class LobbyScene extends Phaser.Scene {
   private domContainer!: HTMLDivElement;
-  private readyToStart = false;
   private playerNames: string[] = [];
+  private roomCreatorId: string | null = null;
 
   constructor() {
     super({ key: 'LobbyScene' });
@@ -65,6 +65,8 @@ export class LobbyScene extends Phaser.Scene {
       #name-input{width:170px;letter-spacing:1px}
       #code-input{width:100px;letter-spacing:4px}
       .start-btn{font-size:14px!important;padding:12px 32px!important;color:#6fcf97!important}
+      .start-btn-hidden{display:none!important}
+      .wait-msg{font-size:11px;color:#888;display:none}
     </style>
     <div class="ls">
       <input id="name-input" type="text" maxlength="12" placeholder="Your name" aria-label="Your name" autocomplete="off">
@@ -76,6 +78,8 @@ export class LobbyScene extends Phaser.Scene {
       <button id="btn-create">CREATE ROOM</button>
       <div id="room-code-display">ROOM: <span id="code-text"></span></div>
       <div id="player-list"></div>
+      <button id="btn-start" class="start-btn start-btn-hidden">START GAME</button>
+      <div id="wait-msg" class="wait-msg">Waiting for host to start...</div>
       <div id="error-msg"></div>
     </div>`;
   }
@@ -83,6 +87,7 @@ export class LobbyScene extends Phaser.Scene {
   private bindDOM() {
     document.getElementById('btn-create')!.addEventListener('click', () => this.createRoom());
     document.getElementById('btn-join')!.addEventListener('click', () => this.joinRoom());
+    document.getElementById('btn-start')!.addEventListener('click', () => this.startGame());
     document.getElementById('code-input')!.addEventListener('keydown', (e) => {
       if ((e as KeyboardEvent).key === 'Enter') this.joinRoom();
     });
@@ -92,30 +97,33 @@ export class LobbyScene extends Phaser.Scene {
   }
 
   private setupSocketListeners() {
+    socket.off('message');
     socket.on('message', (msg: any) => {
       switch (msg.type) {
         case 'room_created':
           setLocalPlayer(msg.playerId, msg.roomCode);
+          updatePlayers([{ id: msg.playerId, name: this.playerNames[0], connected: true }], msg.playerId);
+          this.roomCreatorId = msg.playerId;
           this.onRoomCreated(msg.roomCode);
+          this.renderPlayerList();
           break;
         case 'room_joined':
           setLocalPlayer(msg.playerId, msg.roomCode);
-          updatePlayers(msg.players);
+          updatePlayers(msg.players, msg.creatorId);
+          this.roomCreatorId = msg.creatorId;
           this.onRoomCreated(msg.roomCode);
-          this.renderPlayers(msg.players);
-          this.checkAutoStart(msg.players.length);
+          this.renderPlayerList();
           break;
-        case 'player_joined':
-          this.playerNames.push(msg.playerName);
-          this.renderPlayers(this.playerNames.map((n, i) => ({ id: String(i), name: n })));
-          this.checkAutoStart(this.playerNames.length);
+        case 'player_list':
+          updatePlayers(msg.players, msg.creatorId);
+          this.roomCreatorId = msg.creatorId;
+          this.renderPlayerList();
           break;
         case 'error':
           this.showError(msg.message);
           break;
-        case 'turn_started':
-          setTurn(msg.playerId);
-          this.launchGame(msg.holeNumber, msg.playerName);
+        case 'game_started':
+          this.launchGame(msg.holeNumber);
           break;
       }
     });
@@ -151,30 +159,43 @@ export class LobbyScene extends Phaser.Scene {
     socket.emit('message', { type: 'join_room', roomCode: code, playerName: name });
   }
 
+  private startGame() {
+    if (creatorId !== localPlayerId) return;
+    socket.emit('message', { type: 'start_game', playerId: localPlayerId });
+  }
+
   private onRoomCreated(code: string) {
     const el = document.getElementById('room-code-display')!;
     el.style.display = 'block';
     document.getElementById('code-text')!.textContent = code;
   }
 
-  private renderPlayers(plist: { id: string; name: string }[]) {
+  private renderPlayerList() {
     const el = document.getElementById('player-list')!;
     el.style.display = 'block';
-    el.innerHTML = plist.map(p => `<div>${p.name}</div>`).join('') +
-      `<div style="margin-top:4px;color:#555">${plist.length}/4 players</div>`;
-  }
+    el.innerHTML = playerList.map(p => {
+      const isHost = p.id === creatorId;
+      return `<div>${p.name}${isHost ? ' 👑' : ''}</div>`;
+    }).join('') +
+      `<div style="margin-top:4px;color:#555">${playerList.length}/4 players</div>`;
 
-  private checkAutoStart(count: number) {
-    if (count >= 2 && !this.readyToStart) {
-      this.readyToStart = true;
-      this.time.delayedCall(800, () => {
-        socket.emit('message', { type: 'start_game' });
-      });
+    // Show/hide start button
+    const startBtn = document.getElementById('btn-start')!;
+    const waitMsg = document.getElementById('wait-msg')!;
+    if (creatorId === localPlayerId && playerList.length >= 2) {
+      startBtn.classList.remove('start-btn-hidden');
+      waitMsg.style.display = 'none';
+    } else if (creatorId !== localPlayerId && creatorId !== null) {
+      startBtn.classList.add('start-btn-hidden');
+      waitMsg.style.display = playerList.length >= 2 ? 'block' : 'none';
+    } else {
+      startBtn.classList.add('start-btn-hidden');
+      waitMsg.style.display = 'none';
     }
   }
 
-  private launchGame(holeNumber: number, activeName?: string) {
+  private launchGame(holeNumber: number) {
     this.domContainer.remove();
-    this.scene.start('GameScene', { holeIndex: (holeNumber || 1) - 1, activeName: activeName || '' });
+    this.scene.start('GameScene', { holeIndex: (holeNumber || 1) - 1 });
   }
 }

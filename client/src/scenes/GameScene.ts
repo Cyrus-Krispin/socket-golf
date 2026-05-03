@@ -1,14 +1,22 @@
 import Phaser from 'phaser';
-import { powerToImpulse, isBallStopped, isBallInHole, applyVelocity } from '../physics';
-import { socket, localPlayerId, activePlayerId, setTurn, currentHole, playerList } from '../network';
+import { powerToImpulse, isBallStopped, applyVelocity } from '../physics';
+import { socket, localPlayerId, playerList } from '../network';
 
 interface CourseData {
   name: string;
   par: number;
+  worldWidth: number;
+  worldHeight: number;
   tee: { x: number; y: number };
   hole: { x: number; y: number; visualRadius: number; triggerRadius: number };
   walls: { x: number; y: number; width: number; height: number; rotation?: number }[];
   fairway: { vertices: { x: number; y: number }[] };
+}
+
+interface GhostBall {
+  body: MatterJS.BodyType;
+  nametag: Phaser.GameObjects.Text;
+  target: { x: number; y: number; vx: number; vy: number } | null;
 }
 
 export class GameScene extends Phaser.Scene {
@@ -25,17 +33,22 @@ export class GameScene extends Phaser.Scene {
   private pmBg!: Phaser.GameObjects.Graphics;
   private pmFill!: Phaser.GameObjects.Graphics;
   private holeText!: Phaser.GameObjects.Text;
-  private turnText!: Phaser.GameObjects.Text;
   private strokeText!: Phaser.GameObjects.Text;
   private holeDone = false;
   private maxStrokes = 0;
-  private isMyTurn = false;
-  private activePlayerName = '';
-  private watchingText!: Phaser.GameObjects.Text;
-  private canShoot = false;
-  private remoteShotQueue: { angle: number; power: number }[] = [];
+  private remoteShotQueue: { playerId: string; angle: number; power: number }[] = [];
   private disconnectOverlay!: Phaser.GameObjects.Text;
+  private waitingOverlay!: Phaser.GameObjects.Text;
   private reconnected = false;
+  private ghostBalls = new Map<string, GhostBall>();
+  private ballStateTimer = 0;
+  private isPanning = false;
+  private panStart = new Phaser.Math.Vector2();
+  private camZoom = 1;
+  private playersDone = new Set<string>();
+  private ownBallCategory = 0x0001;
+  private ghostCategory = 0x0002;
+  private holeNumber = 0;
 
   constructor() {
     super({ key: 'GameScene' });
@@ -47,23 +60,30 @@ export class GameScene extends Phaser.Scene {
     this.load.json('hole3', '/courses/hole3.json');
   }
 
-  init(data: { holeIndex: number; activeName?: string }) {
+  init(data: { holeIndex: number }) {
     this.holeIndex = data.holeIndex ?? 0;
     this.strokeCount = 0;
     this.stillFrames = 60;
     this.holeDone = false;
     this.isAiming = false;
-    this.canShoot = false;
     this.remoteShotQueue = [];
-    if (data.activeName) this.activePlayerName = data.activeName;
+    this.ghostBalls.clear();
+    this.playersDone.clear();
   }
 
   create() {
     this.cameras.main.setBackgroundColor('#1a4020');
 
-    const holeNum = this.holeIndex + 1;
-    this.courseData = this.cache.json.get(`hole${holeNum}`) as CourseData;
+    this.holeNumber = this.holeIndex + 1;
+    this.courseData = this.cache.json.get(`hole${this.holeNumber}`) as CourseData;
     this.maxStrokes = this.courseData.par * 2 + 3;
+
+    // Camera setup
+    const cam = this.cameras.main;
+    cam.setBounds(0, 0, this.courseData.worldWidth, this.courseData.worldHeight);
+    cam.centerOn(this.courseData.tee.x, this.courseData.tee.y);
+    this.camZoom = 1;
+    cam.setZoom(this.camZoom);
 
     this.graphics = this.add.graphics();
     this.pmBg = this.add.graphics();
@@ -71,8 +91,18 @@ export class GameScene extends Phaser.Scene {
 
     this.buildCourse();
 
+    // Own ball — category 0x0001
     this.ball = this.matter.add.circle(this.courseData.tee.x, this.courseData.tee.y, 4, {
-      restitution: 0.6, friction: 0.05, frictionAir: 0.01, density: 0.002, label: 'ball',
+      restitution: 0.85,
+      friction: 0.05,
+      frictionAir: 0.01,
+      density: 0.003,
+      label: 'ball',
+      collisionFilter: {
+        category: this.ownBallCategory,
+        mask: 0x0001, // only collide with walls, NOT ghost balls
+        group: 0,
+      },
     });
 
     this.holeSensor = this.matter.add.circle(
@@ -94,21 +124,36 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    // HUD
+    // HUD — all with scrollFactor(0) so they stay fixed on screen
     const mono = { fontFamily: '"Courier New", monospace', fontSize: '12px', color: '#e0e0e0' };
-    this.holeText = this.add.text(10, 8, `HOLE ${holeNum}/3  Par ${this.courseData.par}`, { ...mono, fontSize: '10px', color: '#888' });
-    this.turnText = this.add.text(320, 8, '', { fontFamily: '"Press Start 2P", "Courier New", monospace', fontSize: '10px', color: '#4ecdc4' }).setOrigin(0.5, 0);
-    this.strokeText = this.add.text(630, 8, 'Stroke 0', { ...mono, fontSize: '10px', color: '#888' }).setOrigin(1, 0);
-    this.watchingText = this.add.text(320, 180, '', { fontFamily: '"Press Start 2P", "Courier New", monospace', fontSize: '14px', color: '#e0e0e0', backgroundColor: '#00000088', padding: { x: 12, y: 8 } }).setOrigin(0.5).setAlpha(0);
+    this.holeText = this.add.text(10, 8, `HOLE ${this.holeNumber}/3  Par ${this.courseData.par}`, {
+      ...mono, fontSize: '10px', color: '#888',
+    }).setScrollFactor(0);
+
+    this.strokeText = this.add.text(630, 8, 'Stroke 0', {
+      ...mono, fontSize: '10px', color: '#888',
+    }).setOrigin(1, 0).setScrollFactor(0);
+
+    // Waiting overlay
+    this.waitingOverlay = this.add.text(320, 320, '', {
+      fontFamily: '"Press Start 2P", "Courier New", monospace',
+      fontSize: '12px', color: '#e0e0e0', backgroundColor: '#000000aa',
+      padding: { x: 16, y: 10 },
+    }).setOrigin(0.5).setDepth(100).setScrollFactor(0).setAlpha(0);
 
     // Disconnect overlay
-    this.disconnectOverlay = this.add.text(320, 220, '', {
+    this.disconnectOverlay = this.add.text(320, 360, '', {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
       fontSize: '12px', color: '#eb5757', backgroundColor: '#000000cc',
       padding: { x: 16, y: 10 },
-    }).setOrigin(0.5).setAlpha(0).setDepth(100);
+    }).setOrigin(0.5).setDepth(100).setScrollFactor(0).setAlpha(0);
+
+    // Create ghost balls for other players
+    this.createGhostBalls();
 
     // Connection events
+    socket.off('disconnect');
+    socket.off('connect');
     socket.on('disconnect', () => {
       this.disconnectOverlay.setText('Connection lost...\nReconnecting...');
       this.disconnectOverlay.setAlpha(1);
@@ -121,24 +166,61 @@ export class GameScene extends Phaser.Scene {
       }
     });
 
-    // Determine initial turn
-    this.isMyTurn = activePlayerId === localPlayerId;
+    // Scroll wheel zoom
+    this.input.on('wheel', (_pointer: any, _gos: any, _dx: number, dy: number) => {
+      this.camZoom = Phaser.Math.Clamp(this.camZoom - dy * 0.001, 0.4, 1.5);
+      this.cameras.main.setZoom(this.camZoom);
+    });
 
     this.setupSocketListeners();
-    this.updateTurnUI();
     this.drawCourse();
   }
 
+  private createGhostBalls() {
+    for (const p of playerList) {
+      if (p.id === localPlayerId) continue;
+      this.addGhostBall(p.id, p.name);
+    }
+  }
+
+  private addGhostBall(playerId: string, playerName: string) {
+    const gb = this.matter.add.circle(this.courseData.tee.x, this.courseData.tee.y, 4, {
+      restitution: 0.85,
+      friction: 0.05,
+      frictionAir: 0.01,
+      density: 0.003,
+      label: 'ghost',
+      collisionFilter: {
+        category: this.ghostCategory,
+        mask: 0x0001, // only collide with walls (category 0x0001), NOT own ball
+        group: 0,
+      },
+    });
+
+    const nametag = this.add.text(0, 0, playerName, {
+      fontFamily: '"Courier New", monospace',
+      fontSize: '10px',
+      color: '#f0c060',
+      backgroundColor: '#00000088',
+      padding: { x: 3, y: 1 },
+    }).setOrigin(0.5, 1).setDepth(90);
+
+    this.ghostBalls.set(playerId, { body: gb, nametag, target: null });
+  }
+
   private buildCourse() {
+    const ww = this.courseData.worldWidth;
+    const wh = this.courseData.worldHeight;
     for (const w of this.courseData.walls) {
       this.matter.add.rectangle(w.x, w.y, w.width, w.height, {
         isStatic: true, angle: w.rotation ?? 0, label: 'wall',
       });
     }
-    this.matter.add.rectangle(320, -10, 680, 20, { isStatic: true, label: 'wall' });
-    this.matter.add.rectangle(320, 370, 680, 20, { isStatic: true, label: 'wall' });
-    this.matter.add.rectangle(-10, 180, 20, 400, { isStatic: true, label: 'wall' });
-    this.matter.add.rectangle(650, 180, 20, 400, { isStatic: true, label: 'wall' });
+    // World bounds
+    this.matter.add.rectangle(ww / 2, -10, ww + 40, 20, { isStatic: true, label: 'wall' });
+    this.matter.add.rectangle(ww / 2, wh + 10, ww + 40, 20, { isStatic: true, label: 'wall' });
+    this.matter.add.rectangle(-10, wh / 2, 20, wh + 40, { isStatic: true, label: 'wall' });
+    this.matter.add.rectangle(ww + 10, wh / 2, 20, wh + 40, { isStatic: true, label: 'wall' });
   }
 
   private setupSocketListeners() {
@@ -146,13 +228,14 @@ export class GameScene extends Phaser.Scene {
     socket.on('message', (msg: any) => {
       switch (msg.type) {
         case 'shot_taken':
-          this.onRemoteShot(msg.shot.angle, msg.shot.power);
+          this.onRemoteShot(msg.shot.playerId, msg.shot.angle, msg.shot.power);
           break;
-        case 'turn_started':
-          this.onTurnStarted(msg.playerId, msg.playerName, msg.holeNumber);
+        case 'ball_state':
+          this.onBallState(msg.playerId, msg.x, msg.y, msg.vx, msg.vy);
           break;
         case 'hole_completed':
-          // Other player completed the hole
+          this.playersDone.add(msg.playerId);
+          this.updateWaitingOverlay();
           break;
         case 'score_update':
           this.scene.start('ScoreboardScene', { scores: msg.scores, isFinal: false });
@@ -164,72 +247,35 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private onTurnStarted(pId: string, name: string, holeNum: number) {
-    setTurn(pId);
-    this.isMyTurn = pId === localPlayerId;
-    this.activePlayerName = name;
-    this.strokeCount = 0;
-    this.stillFrames = 60;
-    this.holeDone = false;
-    this.canShoot = this.isMyTurn;
-    this.isAiming = false;
-
-    // Switch hole if needed
-    const targetHole = (holeNum || 1) - 1;
-    if (targetHole !== this.holeIndex) {
-      this.holeIndex = targetHole;
-      this.scene.restart({ holeIndex: targetHole });
-      return;
-    }
-
-    // Reset ball to tee
-    if (this.ball) {
-      applyVelocity(this.ball, 0, 0);
-    }
-    this.matter.world.remove(this.ball);
-    this.ball = this.matter.add.circle(this.courseData.tee.x, this.courseData.tee.y, 4, {
-      restitution: 0.6, friction: 0.05, frictionAir: 0.01, density: 0.002, label: 'ball',
-    });
-    this.recreateHoleSensor();
-
-    this.strokeText.setText('Stroke 0');
-    this.updateTurnUI();
-    this.drawCourse();
+  private onRemoteShot(playerId: string, angle: number, power: number) {
+    const gb = this.ghostBalls.get(playerId);
+    if (!gb) return;
+    this.remoteShotQueue.push({ playerId, angle, power });
   }
 
-  private onRemoteShot(angle: number, power: number) {
-    // Queue for application on next fixed step
-    this.remoteShotQueue.push({ angle, power });
-  }
-
-  private applyRemoteShot(angle: number, power: number) {
-    if (!this.ball) return;
+  private applyRemoteShot(playerId: string, angle: number, power: number) {
+    const gb = this.ghostBalls.get(playerId);
+    if (!gb || !gb.body) return;
     const impulse = powerToImpulse(power);
-    applyVelocity(this.ball, Math.cos(angle) * impulse, Math.sin(angle) * impulse);
-    this.stillFrames = 0;
+    applyVelocity(gb.body, Math.cos(angle) * impulse, Math.sin(angle) * impulse);
   }
 
-  private recreateHoleSensor() {
-    if (this.holeSensor) this.matter.world.remove(this.holeSensor);
-    this.holeSensor = this.matter.add.circle(
-      this.courseData.hole.x, this.courseData.hole.y,
-      this.courseData.hole.triggerRadius,
-      { isStatic: true, isSensor: true, label: 'hole' }
-    );
+  private onBallState(playerId: string, x: number, y: number, vx: number, vy: number) {
+    const gb = this.ghostBalls.get(playerId);
+    if (!gb) return;
+    gb.target = { x, y, vx, vy };
   }
 
-  private updateTurnUI() {
-    if (this.isMyTurn) {
-      this.turnText.setText('YOUR TURN');
-      this.turnText.setColor('#4ecdc4');
-      this.watchingText.setAlpha(0);
-    } else {
-      this.turnText.setText(`WATCHING ${this.activePlayerName || '...'}`);
-      this.turnText.setColor('#888888');
-      this.watchingText.setText(`Watching ${this.activePlayerName || '...'}`);
-      this.watchingText.setAlpha(1);
+  private updateWaitingOverlay() {
+    const doneCount = this.playersDone.size;
+    const total = 1 + this.ghostBalls.size; // me + others
+    if (this.holeDone) {
+      this.waitingOverlay.setText(`Hole finished!\nWaiting for others (${doneCount}/${total})`);
+      this.waitingOverlay.setAlpha(1);
     }
   }
+
+  private updateTurnUI() { /* no-op — removed turn-based UI */ }
 
   private drawCourse() {
     const g = this.graphics;
@@ -237,11 +283,10 @@ export class GameScene extends Phaser.Scene {
 
     // Rough — dark green background
     g.fillStyle(0x1a4020);
-    g.fillRect(0, 0, 640, 360);
+    g.fillRect(0, 0, 640, 640);
 
     const verts = this.courseData.fairway.vertices;
     if (verts.length > 2) {
-      // Fairway shadow — offset polygon 3px for depth cue
       g.fillStyle(0x1e5a28);
       g.beginPath();
       g.moveTo(verts[0].x + 3, verts[0].y + 3);
@@ -249,7 +294,6 @@ export class GameScene extends Phaser.Scene {
       g.closePath();
       g.fillPath();
 
-      // Fairway surface
       g.fillStyle(0x3aaa5e);
       g.lineStyle(1, 0x2a8040);
       g.beginPath();
@@ -260,7 +304,6 @@ export class GameScene extends Phaser.Scene {
       g.strokePath();
     }
 
-    // Walls — dark wood blocks with top-left highlight edge
     for (const w of this.courseData.walls) {
       const wx = w.x - w.width / 2;
       const wy = w.y - w.height / 2;
@@ -271,13 +314,11 @@ export class GameScene extends Phaser.Scene {
       g.beginPath(); g.moveTo(wx, wy); g.lineTo(wx, wy + w.height); g.strokePath();
     }
 
-    // Tee — circle marker
     g.fillStyle(0xd4b45a);
     g.lineStyle(1, 0xa08040);
     g.fillCircle(this.courseData.tee.x, this.courseData.tee.y, 5);
     g.strokeCircle(this.courseData.tee.x, this.courseData.tee.y, 5);
 
-    // Hole cup + flag
     const hx = this.courseData.hole.x;
     const hy = this.courseData.hole.y;
     const hr = this.courseData.hole.visualRadius;
@@ -290,7 +331,7 @@ export class GameScene extends Phaser.Scene {
     g.fillStyle(0xcc4444);
     g.fillTriangle(hx, hy - 16, hx + 7, hy - 13, hx, hy - 10);
 
-    // Ball with drop shadow
+    // Own ball
     if (this.ball) {
       const bx = this.ball.position.x;
       const by = this.ball.position.y;
@@ -301,21 +342,55 @@ export class GameScene extends Phaser.Scene {
       g.fillCircle(bx, by, 4);
       g.strokeCircle(bx, by, 4);
     }
+
+    // Ghost balls
+    this.ghostBalls.forEach((gb) => {
+      if (!gb.body) return;
+      const bx = gb.body.position.x;
+      const by = gb.body.position.y;
+      g.fillStyle(0x000000, 0.25);
+      g.fillCircle(bx + 2, by + 2, 4);
+      g.fillStyle(0xf0d060, 0.9);
+      g.lineStyle(1, 0xc0a040);
+      g.fillCircle(bx, by, 4);
+      g.strokeCircle(bx, by, 4);
+
+      // Nametag follows ghost ball in world space
+      gb.nametag.setPosition(bx, by - 14);
+    });
   }
 
   update(_t: number, _delta: number) {
-    if (this.holeDone) return;
+    if (this.holeDone && this.ball) {
+      this.matter.world.remove(this.ball);
+      (this.ball as any) = null;
+    }
 
     // Fixed timestep
     this.matter.world.step(1000 / 60);
 
     // Apply queued remote shots
     for (const shot of this.remoteShotQueue) {
-      this.applyRemoteShot(shot.angle, shot.power);
+      this.applyRemoteShot(shot.playerId, shot.angle, shot.power);
     }
     this.remoteShotQueue = [];
 
-    // Ball stopped detection
+    // Lerp ghost balls toward received positions
+    this.ghostBalls.forEach((gb) => {
+      if (!gb.target || !gb.body) return;
+      const dx = gb.target.x - gb.body.position.x;
+      const dy = gb.target.y - gb.body.position.y;
+      if (Math.sqrt(dx * dx + dy * dy) > 1) {
+        applyVelocity(
+          gb.body,
+          gb.body.velocity.x + dx * 0.3,
+          gb.body.velocity.y + dy * 0.3,
+        );
+      }
+      gb.target = null; // consume each frame
+    });
+
+    // Ball stopped detection (own ball)
     if (this.ball) {
       const vel = Math.sqrt(this.ball.velocity.x ** 2 + this.ball.velocity.y ** 2);
       if (vel < 0.01) {
@@ -325,41 +400,74 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    // Aim input (only on my turn, ball stopped)
-    if (this.isMyTurn && this.stillFrames >= 60 && !this.holeDone) {
-      this.handleAimInput();
+    // Handle input
+    if (!this.holeDone) {
+      this.handleInput();
+    }
+
+    // Periodically send ball state
+    if (this.ball) {
+      this.ballStateTimer += _delta;
+      if (this.ballStateTimer > 100) {
+        this.ballStateTimer = 0;
+        const vel = Math.sqrt(this.ball.velocity.x ** 2 + this.ball.velocity.y ** 2);
+        if (vel > 0.01) {
+          this.emitBallState();
+        }
+      }
     }
 
     this.drawCourse();
   }
 
-  private handleAimInput() {
+  private handleInput() {
     const ptr = this.input.activePointer;
+    if (!this.ball) return;
 
-    if (ptr.isDown && !this.isAiming) {
-      this.isAiming = true;
-      this.aimStart.set(ptr.x, ptr.y);
+    // Convert screen coords to world coords
+    const worldPtr = this.cameras.main.getWorldPoint(ptr.x, ptr.y);
+
+    // Distance from pointer (world) to own ball
+    const ballDist = Math.sqrt(
+      (worldPtr.x - this.ball.position.x) ** 2 + (worldPtr.y - this.ball.position.y) ** 2
+    );
+
+    if (ptr.isDown && !this.isAiming && !this.isPanning) {
+      if (ballDist < 20 && this.stillFrames >= 60) {
+        this.isAiming = true;
+        this.aimStart.set(worldPtr.x, worldPtr.y);
+      } else {
+        this.isPanning = true;
+        this.panStart.set(ptr.x, ptr.y);
+      }
     }
 
-    if (ptr.isDown && this.isAiming && this.ball) {
-      this.aimCurrent.set(ptr.x, ptr.y);
+    if (ptr.isDown && this.isAiming) {
+      const worldCurrent = this.cameras.main.getWorldPoint(ptr.x, ptr.y);
+      this.aimCurrent.set(worldCurrent.x, worldCurrent.y);
       const dx = this.ball.position.x - this.aimCurrent.x;
       const dy = this.ball.position.y - this.aimCurrent.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const maxDrag = 200;
-      const power = Math.min(dist / maxDrag, 1);
+      const dragDist = Math.sqrt(dx * dx + dy * dy);
+      const maxDrag = 200 / this.camZoom;
+      const power = Math.min(dragDist / maxDrag, 1);
 
-      // Dotted aim line
       const g = this.graphics;
-      const steps = Math.floor(dist / 4);
+      const steps = Math.floor(dragDist / 4);
       g.fillStyle(0x4ecdc4, 0.6);
       for (let i = 0; i < steps; i += 2) {
         const t = (i / steps);
         g.fillRect(this.ball.position.x - dx * t - 1, this.ball.position.y - dy * t - 1, 2, 2);
       }
 
-      // Power meter
       this.drawPowerMeter(power);
+    }
+
+    if (ptr.isDown && this.isPanning) {
+      const dx = (ptr.x - this.panStart.x) / this.camZoom;
+      const dy = (ptr.y - this.panStart.y) / this.camZoom;
+      this.panStart.set(ptr.x, ptr.y);
+      this.cameras.main.scrollX -= dx;
+      this.cameras.main.scrollY -= dy;
     }
 
     if (!ptr.isDown && this.isAiming) {
@@ -369,19 +477,23 @@ export class GameScene extends Phaser.Scene {
 
       const dx = this.ball.position.x - this.aimCurrent.x;
       const dy = this.ball.position.y - this.aimCurrent.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist < 5) return; // too short
+      const dragDist = Math.sqrt(dx * dx + dy * dy);
+      if (dragDist < 5) return;
 
-      const maxDrag = 200;
-      const power = Math.min(dist / maxDrag, 1);
+      const maxDrag = 200 / this.camZoom;
+      const power = Math.min(dragDist / maxDrag, 1);
       const angle = Math.atan2(dy, dx);
 
       this.shoot(angle, power);
     }
+
+    if (!ptr.isDown && this.isPanning) {
+      this.isPanning = false;
+    }
   }
 
   private drawPowerMeter(power: number) {
-    const px = 252, py = 330, sw = 14, sh = 14, gap = 2, total = 8;
+    const px = 252, py = 592, sw = 14, sh = 14, gap = 2, total = 8;
     this.pmBg.clear(); this.pmFill.clear();
     for (let i = 0; i < total; i++) {
       this.pmBg.fillStyle(0x2a2a3e);
@@ -395,7 +507,7 @@ export class GameScene extends Phaser.Scene {
   }
 
   private shoot(angle: number, power: number) {
-    if (!this.isMyTurn || this.holeDone) return;
+    if (this.holeDone) return;
     this.strokeCount++;
     this.stillFrames = 0;
     this.strokeText.setText(`Stroke ${this.strokeCount}`);
@@ -403,7 +515,6 @@ export class GameScene extends Phaser.Scene {
     const impulse = powerToImpulse(power);
     applyVelocity(this.ball, Math.cos(angle) * impulse, Math.sin(angle) * impulse);
 
-    // Broadcast shot to server
     socket.emit('message', {
       type: 'shot_taken',
       shot: {
@@ -416,16 +527,28 @@ export class GameScene extends Phaser.Scene {
       },
     });
 
-    // Check stroke limit
     if (this.strokeCount >= this.maxStrokes) {
       this.time.delayedCall(4000, () => this.onHoleComplete());
     }
+  }
+
+  private emitBallState() {
+    if (!this.ball) return;
+    socket.emit('message', {
+      type: 'ball_state',
+      playerId: localPlayerId,
+      x: this.ball.position.x,
+      y: this.ball.position.y,
+      vx: this.ball.velocity.x,
+      vy: this.ball.velocity.y,
+    });
   }
 
   private onHoleComplete() {
     if (this.holeDone) return;
     this.holeDone = true;
     if (this.ball) this.matter.world.remove(this.ball);
+    (this.ball as any) = null;
 
     socket.emit('message', {
       type: 'hole_completed',
@@ -433,5 +556,7 @@ export class GameScene extends Phaser.Scene {
       strokes: Math.min(this.strokeCount, this.maxStrokes),
       par: this.courseData.par,
     });
+
+    this.updateWaitingOverlay();
   }
 }

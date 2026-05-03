@@ -6,7 +6,7 @@ import { ScoreboardScene } from './scenes/ScoreboardScene';
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.CANVAS,
   width: 640,
-  height: 360,
+  height: 640,
   pixelArt: true,
   roundPixels: true,
   backgroundColor: '#1a1a2e',
@@ -16,6 +16,8 @@ const config: Phaser.Types.Core.GameConfig = {
       gravity: { x: 0, y: 0 },
       debug: false,
       autoUpdate: false,
+      positionIterations: 8,
+      velocityIterations: 4,
     },
   },
   scale: {

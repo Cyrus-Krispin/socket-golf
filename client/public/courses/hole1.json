@@ -1,17 +1,19 @@
 {
-  "name": "Hole 1 – Straightaway",
-  "par": 2,
-  "tee": { "x": 80, "y": 180 },
-  "hole": { "x": 560, "y": 180, "visualRadius": 7, "triggerRadius": 12 },
+  "name": "Hole 1 – The Drop",
+  "par": 3,
+  "worldWidth": 640,
+  "worldHeight": 720,
+  "tee": { "x": 320, "y": 80 },
+  "hole": { "x": 320, "y": 640, "visualRadius": 7, "triggerRadius": 12 },
   "walls": [
-    { "x": 210, "y": 148, "width": 90, "height": 16 },
-    { "x": 330, "y": 212, "width": 90, "height": 16 },
-    { "x": 450, "y": 155, "width": 16, "height": 70 }
+    { "x": 260, "y": 240, "width": 160, "height": 16 },
+    { "x": 380, "y": 380, "width": 16, "height": 80 },
+    { "x": 220, "y": 520, "width": 130, "height": 16 }
   ],
   "fairway": {
     "vertices": [
-      { "x": 40, "y": 100 }, { "x": 600, "y": 100 },
-      { "x": 600, "y": 260 }, { "x": 40, "y": 260 }
+      { "x": 100, "y": 40 }, { "x": 540, "y": 40 },
+      { "x": 540, "y": 680 }, { "x": 100, "y": 680 }
     ]
   }
 }
