@@ -5,10 +5,8 @@ import { ScoreboardScene } from './scenes/ScoreboardScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.CANVAS,
-  width: 640,
-  height: 640,
-  pixelArt: true,
-  roundPixels: true,
+  width: window.innerWidth,
+  height: window.innerHeight,
   backgroundColor: '#1a1a2e',
   physics: {
     default: 'matter',
@@ -21,7 +19,7 @@ const config: Phaser.Types.Core.GameConfig = {
     },
   },
   scale: {
-    mode: Phaser.Scale.FIT,
+    mode: Phaser.Scale.RESIZE,
     autoCenter: Phaser.Scale.CENTER_BOTH,
   },
   scene: [LobbyScene, GameScene, ScoreboardScene],

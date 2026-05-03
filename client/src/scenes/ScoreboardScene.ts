@@ -28,15 +28,19 @@ export class ScoreboardScene extends Phaser.Scene {
   create() {
     this.cameras.main.setBackgroundColor('#1a1a2e');
 
+    const cw = this.cameras.main.width;
+    const ch = this.cameras.main.height;
+    const cx = cw / 2;
+    const topY = ch * 0.15;
+
     const title = this.isFinal ? 'FINAL SCORES' : 'HOLE COMPLETE';
-    this.add.text(320, 60, title, {
+    this.add.text(cx, topY, title, {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
       fontSize: '14px',
       color: '#6fcf97',
     }).setOrigin(0.5);
 
-    // Score table
-    let y = 110;
+    let y = topY + 50;
     const mono = { fontFamily: '"Courier New", monospace', fontSize: '14px', color: '#e0e0e0' };
     const muted = { ...mono, color: '#888888' };
 
@@ -50,28 +54,27 @@ export class ScoreboardScene extends Phaser.Scene {
       const parColor = entry.relativeToPar === 0 ? '#6fcf97' :
         entry.relativeToPar > 0 ? '#eb5757' : '#6fcf97';
 
-      this.add.text(160, y, `${prefix}${entry.name}`, {
+      this.add.text(cx - 160, y, `${prefix}${entry.name}`, {
         ...(isMe ? mono : muted),
         fontFamily: '"Courier New", monospace',
         fontSize: '14px',
       }).setOrigin(0, 0.5);
 
-      this.add.text(420, y, `${entry.strokes}`, {
+      this.add.text(cx + 100, y, `${entry.strokes}`, {
         ...mono, fontSize: '14px',
       }).setOrigin(0.5);
 
-      this.add.text(480, y, `(${parStr})`, {
+      this.add.text(cx + 160, y, `(${parStr})`, {
         ...mono, fontSize: '12px', color: parColor,
       }).setOrigin(0.5);
 
       y += 28;
     });
 
-    // Buttons
     const btnY = this.isFinal ? y + 30 : y + 10;
 
     if (this.isFinal) {
-      const btn = this.add.text(320, btnY, 'BACK TO LOBBY', {
+      const btn = this.add.text(cx, btnY, 'BACK TO LOBBY', {
         fontFamily: '"Courier New", monospace',
         fontSize: '11px',
         color: '#4ecdc4',
@@ -85,8 +88,7 @@ export class ScoreboardScene extends Phaser.Scene {
 
       this.input.keyboard!.on('keydown-ENTER', () => this.scene.start('LobbyScene'));
     } else {
-      // Ready system for next hole
-      const readyBtn = this.add.text(320, btnY, 'I\'M READY FOR NEXT HOLE', {
+      const readyBtn = this.add.text(cx, btnY, 'I\'M READY FOR NEXT HOLE', {
         fontFamily: '"Courier New", monospace',
         fontSize: '11px',
         color: '#4ecdc4',
@@ -107,19 +109,14 @@ export class ScoreboardScene extends Phaser.Scene {
         this.updateReadyDisplay();
       });
 
-      // Ready status display
       this.renderReadyStatus(btnY + 40);
 
-      // Listen for ready updates
       socket.off('message');
       socket.on('message', (msg: any) => {
         switch (msg.type) {
           case 'hole_ready':
             this.readyPlayers.add(msg.playerId);
             this.updateReadyDisplay();
-            if (msg.playerId === localPlayerId) {
-              // Already handled above
-            }
             break;
           case 'all_ready':
             this.scene.start('GameScene', { holeIndex: (msg.holeNumber || 1) - 1 });
@@ -130,13 +127,12 @@ export class ScoreboardScene extends Phaser.Scene {
   }
 
   private renderReadyStatus(startY: number) {
-    // Remove old status text if any
     const existing = document.getElementById('ready-status');
     if (existing) existing.remove();
 
     const div = document.createElement('div');
     div.id = 'ready-status';
-    div.style.cssText = 'position:absolute;top:' + (startY + 20) + 'px;left:0;width:100%;text-align:center;font-size:11px;color:#888;pointer-events:none';
+    div.style.cssText = `position:absolute;top:${startY}px;left:0;width:100%;text-align:center;font-size:11px;color:#888;pointer-events:none`;
     document.getElementById('game-container')!.appendChild(div);
     this.updateReadyDisplay();
   }

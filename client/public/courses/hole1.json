@@ -1,10 +1,10 @@
 {
-  "name": "Hole 1 – The Drop",
+  "name": "Hole 1 – The Climb",
   "par": 3,
   "worldWidth": 640,
   "worldHeight": 720,
-  "tee": { "x": 320, "y": 80 },
-  "hole": { "x": 320, "y": 640, "visualRadius": 7, "triggerRadius": 12 },
+  "tee": { "x": 320, "y": 640 },
+  "hole": { "x": 320, "y": 80, "visualRadius": 7, "triggerRadius": 12 },
   "walls": [
     { "x": 260, "y": 240, "width": 160, "height": 16 },
     { "x": 380, "y": 380, "width": 16, "height": 80 },

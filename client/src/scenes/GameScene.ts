@@ -78,9 +78,8 @@ export class GameScene extends Phaser.Scene {
     this.courseData = this.cache.json.get(`hole${this.holeNumber}`) as CourseData;
     this.maxStrokes = this.courseData.par * 2 + 3;
 
-    // Camera setup
+    // Camera setup — no bounds, free pan/zoom
     const cam = this.cameras.main;
-    cam.setBounds(0, 0, this.courseData.worldWidth, this.courseData.worldHeight);
     cam.centerOn(this.courseData.tee.x, this.courseData.tee.y);
     this.camZoom = 1;
     cam.setZoom(this.camZoom);
@@ -125,28 +124,32 @@ export class GameScene extends Phaser.Scene {
     });
 
     // HUD — all with scrollFactor(0) so they stay fixed on screen
+    const cw = () => this.cameras.main.width;
+    const ch = () => this.cameras.main.height;
     const mono = { fontFamily: '"Courier New", monospace', fontSize: '12px', color: '#e0e0e0' };
     this.holeText = this.add.text(10, 8, `HOLE ${this.holeNumber}/3  Par ${this.courseData.par}`, {
       ...mono, fontSize: '10px', color: '#888',
     }).setScrollFactor(0);
 
-    this.strokeText = this.add.text(630, 8, 'Stroke 0', {
+    this.strokeText = this.add.text(0, 8, 'Stroke 0', {
       ...mono, fontSize: '10px', color: '#888',
     }).setOrigin(1, 0).setScrollFactor(0);
 
     // Waiting overlay
-    this.waitingOverlay = this.add.text(320, 320, '', {
+    this.waitingOverlay = this.add.text(0, 0, '', {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
       fontSize: '12px', color: '#e0e0e0', backgroundColor: '#000000aa',
       padding: { x: 16, y: 10 },
     }).setOrigin(0.5).setDepth(100).setScrollFactor(0).setAlpha(0);
 
     // Disconnect overlay
-    this.disconnectOverlay = this.add.text(320, 360, '', {
+    this.disconnectOverlay = this.add.text(0, 0, '', {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
       fontSize: '12px', color: '#eb5757', backgroundColor: '#000000cc',
       padding: { x: 16, y: 10 },
     }).setOrigin(0.5).setDepth(100).setScrollFactor(0).setAlpha(0);
+
+    this.updateHUDPositions();
 
     // Create ghost balls for other players
     this.createGhostBalls();
@@ -171,6 +174,9 @@ export class GameScene extends Phaser.Scene {
       this.camZoom = Phaser.Math.Clamp(this.camZoom - dy * 0.001, 0.4, 1.5);
       this.cameras.main.setZoom(this.camZoom);
     });
+
+    // Window resize
+    this.scale.on('resize', () => this.updateHUDPositions());
 
     this.setupSocketListeners();
     this.drawCourse();
@@ -275,15 +281,21 @@ export class GameScene extends Phaser.Scene {
     }
   }
 
+  private updateHUDPositions() {
+    const cw = this.cameras.main.width;
+    const ch = this.cameras.main.height;
+    this.strokeText.setPosition(cw - 10, 8);
+    this.waitingOverlay.setPosition(cw / 2, ch / 2);
+    this.disconnectOverlay.setPosition(cw / 2, ch / 2 + 40);
+  }
+
   private updateTurnUI() { /* no-op — removed turn-based UI */ }
 
   private drawCourse() {
     const g = this.graphics;
     g.clear();
 
-    // Rough — dark green background
-    g.fillStyle(0x1a4020);
-    g.fillRect(0, 0, 640, 640);
+    // Rough — dark green (camera background color handles the rest)
 
     const verts = this.courseData.fairway.vertices;
     if (verts.length > 2) {
@@ -375,19 +387,20 @@ export class GameScene extends Phaser.Scene {
     }
     this.remoteShotQueue = [];
 
-    // Lerp ghost balls toward received positions
+    // Gentle position correction for ghost balls — no velocity impulse
     this.ghostBalls.forEach((gb) => {
       if (!gb.target || !gb.body) return;
       const dx = gb.target.x - gb.body.position.x;
       const dy = gb.target.y - gb.body.position.y;
-      if (Math.sqrt(dx * dx + dy * dy) > 1) {
-        applyVelocity(
-          gb.body,
-          gb.body.velocity.x + dx * 0.3,
-          gb.body.velocity.y + dy * 0.3,
-        );
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        const lerp = 0.08;
+        const nx = gb.body.position.x + dx * lerp;
+        const ny = gb.body.position.y + dy * lerp;
+        (gb.body as any).position.x = nx;
+        (gb.body as any).position.y = ny;
+        (gb.body as any).positionPrev.x = nx - (gb.body as any).velocity.x;
+        (gb.body as any).positionPrev.y = ny - (gb.body as any).velocity.y;
       }
-      gb.target = null; // consume each frame
     });
 
     // Ball stopped detection (own ball)
@@ -493,7 +506,10 @@ export class GameScene extends Phaser.Scene {
   }
 
   private drawPowerMeter(power: number) {
-    const px = 252, py = 592, sw = 14, sh = 14, gap = 2, total = 8;
+    const sw = 14, sh = 14, gap = 2, total = 8;
+    const totalW = total * (sw + gap) - gap;
+    const px = (this.cameras.main.width - totalW) / 2;
+    const py = this.cameras.main.height - 48;
     this.pmBg.clear(); this.pmFill.clear();
     for (let i = 0; i < total; i++) {
       this.pmBg.fillStyle(0x2a2a3e);

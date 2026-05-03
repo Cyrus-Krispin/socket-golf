@@ -3,8 +3,8 @@
   "par": 4,
   "worldWidth": 640,
   "worldHeight": 800,
-  "tee": { "x": 320, "y": 80 },
-  "hole": { "x": 320, "y": 720, "visualRadius": 7, "triggerRadius": 12 },
+  "tee": { "x": 320, "y": 720 },
+  "hole": { "x": 320, "y": 80, "visualRadius": 7, "triggerRadius": 12 },
   "walls": [
     { "x": 150, "y": 200, "width": 16, "height": 120 },
     { "x": 490, "y": 300, "width": 16, "height": 120 },

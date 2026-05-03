@@ -13,17 +13,24 @@ export class LobbyScene extends Phaser.Scene {
   create() {
     this.cameras.main.setBackgroundColor('#1a1a2e');
 
-    this.add.text(320, 60, 'SOCKET GOLF', {
+    const cx = () => this.cameras.main.centerX;
+    const cy = () => this.cameras.main.centerY;
+
+    const title = this.add.text(cx(), cy() - 80, 'SOCKET GOLF', {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
       fontSize: '16px',
       color: '#4ecdc4',
     }).setOrigin(0.5);
 
-    this.add.text(320, 90, 'no login. no accounts. just golf.', {
+    this.add.text(cx(), cy() - 50, 'no login. no accounts. just golf.', {
       fontFamily: '"Courier New", monospace',
       fontSize: '10px',
       color: '#888888',
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
+
+    this.scale.on('resize', () => {
+      title.setPosition(cx(), cy() - 80);
+    });
 
     connectSocket();
     this.setupSocketListeners();
