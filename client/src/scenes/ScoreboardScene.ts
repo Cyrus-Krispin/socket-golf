@@ -26,6 +26,13 @@ export class ScoreboardScene extends Phaser.Scene {
   }
 
   create() {
+    this.readyPlayers.clear();
+    this.myReady = false;
+    this.cleanupReadyDOM();
+
+    // Clean up DOM element on scene exit so it doesn't bleed into GameScene
+    this.events.on('shutdown', () => this.cleanupReadyDOM());
+
     this.cameras.main.setBackgroundColor('#1a1a2e');
 
     const cw = this.cameras.main.width;
@@ -126,9 +133,13 @@ export class ScoreboardScene extends Phaser.Scene {
     }
   }
 
-  private renderReadyStatus(startY: number) {
+  private cleanupReadyDOM() {
     const existing = document.getElementById('ready-status');
     if (existing) existing.remove();
+  }
+
+  private renderReadyStatus(startY: number) {
+    this.cleanupReadyDOM();
 
     const div = document.createElement('div');
     div.id = 'ready-status';
