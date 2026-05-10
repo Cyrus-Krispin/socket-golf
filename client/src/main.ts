@@ -14,8 +14,9 @@ const config: Phaser.Types.Core.GameConfig = {
       gravity: { x: 0, y: 0 },
       debug: false,
       autoUpdate: false,
-      positionIterations: 8,
-      velocityIterations: 4,
+      positionIterations: 12,
+      velocityIterations: 8,
+      constraintIterations: 4,
     },
   },
   scale: {

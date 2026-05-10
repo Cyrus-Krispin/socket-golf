@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 import { powerToImpulse, isBallStopped, applyVelocity } from '../physics';
 import { socket, localPlayerId, playerList } from '../network';
 
+type Point = { x: number; y: number };
+
 interface CourseData {
   name: string;
   par: number;
@@ -18,6 +20,25 @@ interface GhostBall {
   nametag: Phaser.GameObjects.Text;
   target: { x: number; y: number; vx: number; vy: number } | null;
 }
+
+interface SinkingBall {
+  x: number;
+  y: number;
+  radius: number;
+  alpha: number;
+  shadowAlpha: number;
+}
+
+const PHYSICS_STEP_MS = 1000 / 60;
+const MAX_PHYSICS_STEPS = 4;
+const BALL_RADIUS = 5;
+const WALL_CATEGORY = 0x0001;
+const OWN_BALL_CATEGORY = 0x0002;
+const GHOST_CATEGORY = 0x0004;
+const COURSE_EDGE_THICKNESS = 22;
+const COURSE_EDGE_VISUAL_OFFSET = 8;
+const HOLE_CAPTURE_SPEED = 0.68;
+const HOLE_CAPTURE_FRAMES = 8;
 
 export class GameScene extends Phaser.Scene {
   private holeIndex = 0;
@@ -41,12 +62,14 @@ export class GameScene extends Phaser.Scene {
   private reconnected = false;
   private ghostBalls = new Map<string, GhostBall>();
   private ballStateTimer = 0;
+  private physicsAccumulator = 0;
+  private holeCaptureFrames = 0;
+  private holeCompletionSent = false;
+  private sinkingBall: SinkingBall | null = null;
   private isPanning = false;
   private panStart = new Phaser.Math.Vector2();
   private camZoom = 1;
   private playersDone = new Set<string>();
-  private ownBallCategory = 0x0001;
-  private ghostCategory = 0x0002;
   private holeNumber = 0;
 
   constructor() {
@@ -68,38 +91,36 @@ export class GameScene extends Phaser.Scene {
     this.remoteShotQueue = [];
     this.ghostBalls.clear();
     this.playersDone.clear();
+    this.physicsAccumulator = 0;
+    this.holeCaptureFrames = 0;
+    this.holeCompletionSent = false;
+    this.sinkingBall = null;
   }
 
   create() {
-    this.cameras.main.setBackgroundColor('#1a4020');
+    this.cameras.main.setBackgroundColor('#102918');
 
     this.holeNumber = this.holeIndex + 1;
     this.courseData = this.cache.json.get(`hole${this.holeNumber}`) as CourseData;
     this.maxStrokes = this.courseData.par * 2 + 3;
 
-    // Camera setup — fit entire hole in viewport, centered, no bounds
-    const cam = this.cameras.main;
-    const fitX = this.cameras.main.width / this.courseData.worldWidth;
-    const fitY = this.cameras.main.height / this.courseData.worldHeight;
-    this.camZoom = Phaser.Math.Clamp(Math.min(fitX, fitY) * 0.88, 0.3, 1.5);
-    cam.setZoom(this.camZoom);
-    cam.centerOn(this.courseData.worldWidth / 2, this.courseData.worldHeight / 2);
+    this.fitCameraToCourse(true);
 
     this.graphics = this.add.graphics();
     this.aimLineGfx = this.add.graphics();
 
     this.buildCourse();
 
-    // Own ball — category 0x0001
-    this.ball = this.matter.add.circle(this.courseData.tee.x, this.courseData.tee.y, 4, {
-      restitution: 0.85,
-      friction: 0.05,
-      frictionAir: 0.01,
-      density: 0.003,
+    this.ball = this.matter.add.circle(this.courseData.tee.x, this.courseData.tee.y, BALL_RADIUS, {
+      restitution: 0.96,
+      friction: 0,
+      frictionStatic: 0,
+      frictionAir: 0.012,
+      density: 0.0025,
       label: 'ball',
       collisionFilter: {
-        category: this.ownBallCategory,
-        mask: 0x0001, // only collide with walls, NOT ghost balls
+        category: OWN_BALL_CATEGORY,
+        mask: WALL_CATEGORY,
         group: 0,
       },
     });
@@ -112,42 +133,33 @@ export class GameScene extends Phaser.Scene {
 
     this.matter.world.setGravity(0, 0);
 
-    // Hole detection
-    this.matter.world.on('collisionstart', (_e: any, a: MatterJS.BodyType, b: MatterJS.BodyType) => {
-      if (this.holeDone || !this.ball) return;
-      const hasBall = a.label === 'ball' || b.label === 'ball';
-      const hasHole = a.label === 'hole' || b.label === 'hole';
-      if (hasBall && hasHole) {
-        const vel = Math.sqrt(this.ball.velocity.x ** 2 + this.ball.velocity.y ** 2);
-        if (vel < 0.5) this.onHoleComplete();
-      }
-    });
-
-    // HUD — all with scrollFactor(0) so they stay fixed on screen
-    const cw = () => this.cameras.main.width;
-    const ch = () => this.cameras.main.height;
+    // HUD positions are pinned to the camera view so zooming the course does not scale the UI away.
     const mono = { fontFamily: '"Courier New", monospace', fontSize: '12px', color: '#e0e0e0' };
     this.holeText = this.add.text(10, 8, `HOLE ${this.holeNumber}/3  Par ${this.courseData.par}`, {
-      ...mono, fontSize: '13px', color: '#888',
-    }).setScrollFactor(0);
+      ...mono, fontSize: '13px', color: '#d9f2d2',
+      backgroundColor: '#07140dcc',
+      padding: { x: 10, y: 6 },
+    }).setDepth(100);
 
     this.strokeText = this.add.text(0, 8, 'Stroke 0', {
-      ...mono, fontSize: '13px', color: '#888',
-    }).setOrigin(1, 0).setScrollFactor(0);
+      ...mono, fontSize: '13px', color: '#d9f2d2',
+      backgroundColor: '#07140dcc',
+      padding: { x: 10, y: 6 },
+    }).setOrigin(0, 0).setDepth(100);
 
     // Waiting overlay
     this.waitingOverlay = this.add.text(0, 0, '', {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
       fontSize: '16px', color: '#e0e0e0', backgroundColor: '#000000aa',
       padding: { x: 20, y: 12 },
-    }).setOrigin(0.5).setDepth(100).setScrollFactor(0).setAlpha(0);
+    }).setOrigin(0.5).setDepth(100).setAlpha(0);
 
     // Disconnect overlay
     this.disconnectOverlay = this.add.text(0, 0, '', {
       fontFamily: '"Press Start 2P", "Courier New", monospace',
       fontSize: '16px', color: '#eb5757', backgroundColor: '#000000cc',
       padding: { x: 20, y: 12 },
-    }).setOrigin(0.5).setDepth(100).setScrollFactor(0).setAlpha(0);
+    }).setOrigin(0.5).setDepth(100).setAlpha(0);
 
     this.updateHUDPositions();
 
@@ -175,8 +187,15 @@ export class GameScene extends Phaser.Scene {
       this.cameras.main.setZoom(this.camZoom);
     });
 
-    // Window resize
-    this.scale.on('resize', () => this.updateHUDPositions());
+    const resizeGame = () => {
+      if (!this.cameras.main) return;
+      this.fitCameraToCourse(false);
+      this.updateHUDPositions();
+    };
+    this.scale.on('resize', resizeGame);
+    this.events.once('shutdown', () => {
+      this.scale.off('resize', resizeGame);
+    });
 
     this.setupSocketListeners();
     this.drawCourse();
@@ -190,15 +209,16 @@ export class GameScene extends Phaser.Scene {
   }
 
   private addGhostBall(playerId: string, playerName: string) {
-    const gb = this.matter.add.circle(this.courseData.tee.x, this.courseData.tee.y, 4, {
-      restitution: 0.85,
-      friction: 0.05,
-      frictionAir: 0.01,
-      density: 0.003,
+    const gb = this.matter.add.circle(this.courseData.tee.x, this.courseData.tee.y, BALL_RADIUS, {
+      restitution: 0.96,
+      friction: 0,
+      frictionStatic: 0,
+      frictionAir: 0.012,
+      density: 0.0025,
       label: 'ghost',
       collisionFilter: {
-        category: this.ghostCategory,
-        mask: 0x0001, // only collide with walls (category 0x0001), NOT own ball
+        category: GHOST_CATEGORY,
+        mask: WALL_CATEGORY,
         group: 0,
       },
     });
@@ -214,19 +234,80 @@ export class GameScene extends Phaser.Scene {
     this.ghostBalls.set(playerId, { body: gb, nametag, target: null });
   }
 
+  private fitCameraToCourse(center: boolean) {
+    const cam = this.cameras.main;
+    const padding = 52;
+    const fitX = cam.width / (this.courseData.worldWidth + padding * 2);
+    const fitY = cam.height / (this.courseData.worldHeight + padding * 2);
+    this.camZoom = Phaser.Math.Clamp(Math.min(fitX, fitY) * 0.82, 0.28, 1.55);
+    cam.setZoom(this.camZoom);
+    cam.setBounds(
+      -padding,
+      -padding,
+      this.courseData.worldWidth + padding * 2,
+      this.courseData.worldHeight + padding * 2
+    );
+
+    if (center) {
+      cam.centerOn(this.courseData.worldWidth / 2, this.courseData.worldHeight / 2);
+    }
+  }
+
   private buildCourse() {
     const ww = this.courseData.worldWidth;
     const wh = this.courseData.worldHeight;
+    this.addFairwayCurbs();
+
     for (const w of this.courseData.walls) {
-      this.matter.add.rectangle(w.x, w.y, w.width, w.height, {
-        isStatic: true, angle: w.rotation ?? 0, label: 'wall',
-      });
+      this.addStaticWall(w.x, w.y, w.width, w.height, w.rotation ?? 0, 'wall');
     }
-    // World bounds
-    this.matter.add.rectangle(ww / 2, -10, ww + 40, 20, { isStatic: true, label: 'wall' });
-    this.matter.add.rectangle(ww / 2, wh + 10, ww + 40, 20, { isStatic: true, label: 'wall' });
-    this.matter.add.rectangle(-10, wh / 2, 20, wh + 40, { isStatic: true, label: 'wall' });
-    this.matter.add.rectangle(ww + 10, wh / 2, 20, wh + 40, { isStatic: true, label: 'wall' });
+
+    this.addStaticWall(ww / 2, -18, ww + 60, 36, 0, 'world-bound');
+    this.addStaticWall(ww / 2, wh + 18, ww + 60, 36, 0, 'world-bound');
+    this.addStaticWall(-18, wh / 2, 36, wh + 60, 0, 'world-bound');
+    this.addStaticWall(ww + 18, wh / 2, 36, wh + 60, 0, 'world-bound');
+  }
+
+  private addFairwayCurbs() {
+    const verts = this.courseData.fairway.vertices;
+    if (verts.length < 3) return;
+
+    for (let i = 0; i < verts.length; i++) {
+      const a = verts[i];
+      const b = verts[(i + 1) % verts.length];
+      const length = Phaser.Math.Distance.Between(a.x, a.y, b.x, b.y);
+      const angle = Phaser.Math.Angle.Between(a.x, a.y, b.x, b.y);
+      this.addStaticWall(
+        (a.x + b.x) / 2,
+        (a.y + b.y) / 2,
+        length + COURSE_EDGE_THICKNESS,
+        COURSE_EDGE_THICKNESS,
+        angle,
+        'course-edge'
+      );
+    }
+  }
+
+  private addStaticWall(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    angle: number,
+    label: string
+  ) {
+    return this.matter.add.rectangle(x, y, width, height, {
+      isStatic: true,
+      angle,
+      label,
+      restitution: 0.96,
+      friction: 0,
+      frictionStatic: 0,
+      collisionFilter: {
+        category: WALL_CATEGORY,
+        mask: 0xffffffff,
+      },
+    });
   }
 
   private setupSocketListeners() {
@@ -282,11 +363,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateHUDPositions() {
-    const cw = this.cameras.main.width;
-    const ch = this.cameras.main.height;
-    this.strokeText.setPosition(cw - 10, 8);
-    this.waitingOverlay.setPosition(cw / 2, ch / 2);
-    this.disconnectOverlay.setPosition(cw / 2, ch / 2 + 40);
+    const cam = this.cameras.main;
+    const view = cam.worldView;
+    const invZoom = 1 / cam.zoom;
+    this.holeText.setScale(invZoom).setPosition(view.x + 14 * invZoom, view.y + 12 * invZoom);
+    this.strokeText.setScale(invZoom).setPosition(view.x + 14 * invZoom, view.y + 42 * invZoom);
+    this.waitingOverlay.setScale(invZoom).setPosition(view.centerX, view.centerY);
+    this.disconnectOverlay.setScale(invZoom).setPosition(view.centerX, view.centerY + 44 * invZoom);
   }
 
   private updateTurnUI() { /* no-op — removed turn-based UI */ }
@@ -295,98 +378,277 @@ export class GameScene extends Phaser.Scene {
     const g = this.graphics;
     g.clear();
 
-    // Rough — dark green (camera background color handles the rest)
-
-    const verts = this.courseData.fairway.vertices;
-    if (verts.length > 2) {
-      g.fillStyle(0x1e5a28);
-      g.beginPath();
-      g.moveTo(verts[0].x + 3, verts[0].y + 3);
-      for (let i = 1; i < verts.length; i++) g.lineTo(verts[i].x + 3, verts[i].y + 3);
-      g.closePath();
-      g.fillPath();
-
-      g.fillStyle(0x3aaa5e);
-      g.lineStyle(1, 0x2a8040);
-      g.beginPath();
-      g.moveTo(verts[0].x, verts[0].y);
-      for (let i = 1; i < verts.length; i++) g.lineTo(verts[i].x, verts[i].y);
-      g.closePath();
-      g.fillPath();
-      g.strokePath();
-    }
+    this.drawRoughTexture(g);
+    this.drawFairway(g);
 
     for (const w of this.courseData.walls) {
-      const wx = w.x - w.width / 2;
-      const wy = w.y - w.height / 2;
-      g.fillStyle(0x5a3015);
-      g.fillRect(wx, wy, w.width, w.height);
-      g.lineStyle(2, 0x7a5035);
-      g.beginPath(); g.moveTo(wx, wy); g.lineTo(wx + w.width, wy); g.strokePath();
-      g.beginPath(); g.moveTo(wx, wy); g.lineTo(wx, wy + w.height); g.strokePath();
+      this.drawWall(g, w);
     }
 
-    g.fillStyle(0xd4b45a);
-    g.lineStyle(1, 0xa08040);
-    g.fillCircle(this.courseData.tee.x, this.courseData.tee.y, 5);
-    g.strokeCircle(this.courseData.tee.x, this.courseData.tee.y, 5);
+    this.drawTee(g);
+    this.drawHole(g);
 
-    const hx = this.courseData.hole.x;
-    const hy = this.courseData.hole.y;
-    const hr = this.courseData.hole.visualRadius;
-    g.fillStyle(0x0a1208);
-    g.fillCircle(hx, hy, hr);
-    g.lineStyle(8, 0x222222);
-    g.strokeCircle(hx, hy, hr + 1);
-    g.lineStyle(1, 0xcccccc);
-    g.beginPath(); g.moveTo(hx, hy); g.lineTo(hx, hy - 16); g.strokePath();
-    g.fillStyle(0xcc4444);
-    g.fillTriangle(hx, hy - 16, hx + 7, hy - 13, hx, hy - 10);
-
-    // Own ball
     if (this.ball) {
-      const bx = this.ball.position.x;
-      const by = this.ball.position.y;
-      g.fillStyle(0x000000, 0.25);
-      g.fillCircle(bx + 2, by + 2, 4);
-      g.fillStyle(0xf0f0f0);
-      g.lineStyle(1, 0xaaaaaa);
-      g.fillCircle(bx, by, 4);
-      g.strokeCircle(bx, by, 4);
+      this.drawBall(g, this.ball.position.x, this.ball.position.y, BALL_RADIUS, 0xf7f4df, 0xd5d0b8);
     }
 
-    // Ghost balls
+    if (this.sinkingBall) {
+      this.drawBall(
+        g,
+        this.sinkingBall.x,
+        this.sinkingBall.y,
+        this.sinkingBall.radius,
+        0xf7f4df,
+        0xd5d0b8,
+        this.sinkingBall.alpha,
+        this.sinkingBall.shadowAlpha
+      );
+    }
+
     this.ghostBalls.forEach((gb) => {
       if (!gb.body) return;
       const bx = gb.body.position.x;
       const by = gb.body.position.y;
-      g.fillStyle(0x000000, 0.25);
-      g.fillCircle(bx + 2, by + 2, 4);
-      g.fillStyle(0xf0d060, 0.9);
-      g.lineStyle(1, 0xc0a040);
-      g.fillCircle(bx, by, 4);
-      g.strokeCircle(bx, by, 4);
-
-      // Nametag follows ghost ball in world space
-      gb.nametag.setPosition(bx, by - 14);
+      this.drawBall(g, bx, by, BALL_RADIUS, 0xf5d66f, 0xb8902f, 0.92, 0.2);
+      gb.nametag.setPosition(bx, by - 16);
     });
   }
 
-  update(_t: number, _delta: number) {
-    if (this.holeDone && this.ball) {
-      this.matter.world.remove(this.ball);
-      (this.ball as any) = null;
+  private drawFairway(g: Phaser.GameObjects.Graphics) {
+    const verts = this.courseData.fairway.vertices;
+    if (verts.length < 3) return;
+
+    this.drawFilledPolygon(g, verts, 0x07170c, 0.55, 0, 18);
+    this.drawStrokedPolygon(g, verts, COURSE_EDGE_THICKNESS + 8, 0x08180d, 0.65, 0, 16);
+    this.drawStrokedPolygon(g, verts, COURSE_EDGE_THICKNESS + 2, 0x5c472b, 1, 0, COURSE_EDGE_VISUAL_OFFSET);
+    this.drawStrokedPolygon(g, verts, COURSE_EDGE_THICKNESS - 8, 0x263b21, 1, 0, 2);
+    this.drawFilledPolygon(g, verts, 0x42ad5d);
+    this.drawFairwayTexture(g);
+    this.drawStrokedPolygon(g, verts, 3, 0x94df85, 0.55);
+  }
+
+  private drawTee(g: Phaser.GameObjects.Graphics) {
+    g.fillStyle(0xd4b45a);
+    g.fillEllipse(this.courseData.tee.x + 2, this.courseData.tee.y + 5, 38, 18);
+    g.fillStyle(0xe3c871);
+    g.lineStyle(2, 0x9d7b35, 0.9);
+    g.fillEllipse(this.courseData.tee.x, this.courseData.tee.y, 38, 18);
+    g.strokeEllipse(this.courseData.tee.x, this.courseData.tee.y, 38, 18);
+  }
+
+  private drawHole(g: Phaser.GameObjects.Graphics) {
+    const hx = this.courseData.hole.x;
+    const hy = this.courseData.hole.y;
+    const hr = this.courseData.hole.visualRadius;
+    g.fillStyle(0x000000, 0.24);
+    g.fillEllipse(hx + 2, hy + 7, hr * 3.2, hr * 1.35);
+    g.fillStyle(0x22331e);
+    g.fillCircle(hx, hy, hr + 6);
+    g.fillStyle(0x050705);
+    g.fillCircle(hx, hy, hr + 1);
+    g.lineStyle(2, 0xb7d8a5, 0.42);
+    g.strokeCircle(hx - 1, hy - 1, hr + 3);
+
+    if (this.sinkingBall) {
+      const pulse = 1 - this.sinkingBall.alpha;
+      g.lineStyle(2, 0xd7f1cf, 0.42 * this.sinkingBall.alpha);
+      g.strokeCircle(hx, hy, hr + 7 + pulse * 5);
     }
 
-    // Fixed timestep
-    this.matter.world.step(1000 / 60);
+    g.lineStyle(2, 0xf4f1de, 0.9);
+    g.beginPath();
+    g.moveTo(hx + 2, hy - 2);
+    g.lineTo(hx + 2, hy - 34);
+    g.strokePath();
+    g.fillStyle(0xd34f39);
+    g.fillTriangle(hx + 3, hy - 34, hx + 22, hy - 28, hx + 3, hy - 22);
+    g.lineStyle(1, 0x7d221d, 0.8);
+    g.strokeTriangle(hx + 3, hy - 34, hx + 22, hy - 28, hx + 3, hy - 22);
+  }
 
-    // Apply queued remote shots
+  private drawWall(g: Phaser.GameObjects.Graphics, wall: CourseData['walls'][number]) {
+    const angle = wall.rotation ?? 0;
+    const top = this.rotatedRectPoints(wall.x, wall.y, wall.width, wall.height, angle);
+    const low = this.rotatedRectPoints(wall.x, wall.y, wall.width, wall.height, angle, 0, 8);
+
+    this.drawFilledPolygon(g, low, 0x150f0a, 0.35, 2, 3);
+    this.drawFilledPolygon(g, [top[1], top[2], low[2], low[1]], 0x3e2a19);
+    this.drawFilledPolygon(g, [top[2], top[3], low[3], low[2]], 0x2f2015);
+    this.drawFilledPolygon(g, top, 0x725336);
+    this.drawLine(g, top[0], top[1], 2, 0xa98758, 0.95);
+    this.drawLine(g, top[0], top[3], 2, 0x9a764b, 0.85);
+    this.drawStrokedPolygon(g, top, 1, 0x21160f, 0.7);
+  }
+
+  private drawBall(
+    g: Phaser.GameObjects.Graphics,
+    x: number,
+    y: number,
+    radius: number,
+    fill: number,
+    stroke: number,
+    alpha = 1,
+    shadowAlpha = 0.28
+  ) {
+    g.fillStyle(0x000000, shadowAlpha);
+    g.fillEllipse(x + 3, y + 6, radius * 2.2, radius * 0.85);
+    g.fillStyle(fill, alpha);
+    g.fillCircle(x, y, radius);
+    g.lineStyle(1, stroke, alpha);
+    g.strokeCircle(x, y, radius);
+    g.fillStyle(0xffffff, alpha * 0.68);
+    g.fillCircle(x - radius * 0.33, y - radius * 0.35, Math.max(1, radius * 0.28));
+  }
+
+  private drawRoughTexture(g: Phaser.GameObjects.Graphics) {
+    g.fillStyle(0x183f20, 0.55);
+    for (let y = 18; y < this.courseData.worldHeight; y += 38) {
+      for (let x = 18 + ((y / 38) % 2) * 16; x < this.courseData.worldWidth; x += 44) {
+        g.fillRect(x, y, 10, 1);
+      }
+    }
+  }
+
+  private drawFairwayTexture(g: Phaser.GameObjects.Graphics) {
+    const verts = this.courseData.fairway.vertices;
+    g.fillStyle(0xb7ef9a, 0.12);
+    for (let y = 44; y < this.courseData.worldHeight; y += 34) {
+      for (let x = 44; x < this.courseData.worldWidth; x += 44) {
+        if (!this.pointInPolygon(x, y, verts)) continue;
+        g.fillRect(x - 8, y, 16, 1);
+        g.fillRect(x + 2, y + 8, 12, 1);
+      }
+    }
+  }
+
+  private drawFilledPolygon(
+    g: Phaser.GameObjects.Graphics,
+    points: Point[],
+    color: number,
+    alpha = 1,
+    dx = 0,
+    dy = 0
+  ) {
+    if (!points.length) return;
+    g.fillStyle(color, alpha);
+    g.beginPath();
+    g.moveTo(points[0].x + dx, points[0].y + dy);
+    for (let i = 1; i < points.length; i++) {
+      g.lineTo(points[i].x + dx, points[i].y + dy);
+    }
+    g.closePath();
+    g.fillPath();
+  }
+
+  private drawStrokedPolygon(
+    g: Phaser.GameObjects.Graphics,
+    points: Point[],
+    width: number,
+    color: number,
+    alpha = 1,
+    dx = 0,
+    dy = 0
+  ) {
+    if (!points.length) return;
+    g.lineStyle(width, color, alpha);
+    g.beginPath();
+    g.moveTo(points[0].x + dx, points[0].y + dy);
+    for (let i = 1; i < points.length; i++) {
+      g.lineTo(points[i].x + dx, points[i].y + dy);
+    }
+    g.closePath();
+    g.strokePath();
+  }
+
+  private drawLine(
+    g: Phaser.GameObjects.Graphics,
+    a: Point,
+    b: Point,
+    width: number,
+    color: number,
+    alpha = 1
+  ) {
+    g.lineStyle(width, color, alpha);
+    g.beginPath();
+    g.moveTo(a.x, a.y);
+    g.lineTo(b.x, b.y);
+    g.strokePath();
+  }
+
+  private rotatedRectPoints(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    angle: number,
+    dx = 0,
+    dy = 0
+  ): Point[] {
+    const hw = width / 2;
+    const hh = height / 2;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return [
+      { x: -hw, y: -hh },
+      { x: hw, y: -hh },
+      { x: hw, y: hh },
+      { x: -hw, y: hh },
+    ].map((p) => ({
+      x: x + dx + p.x * cos - p.y * sin,
+      y: y + dy + p.x * sin + p.y * cos,
+    }));
+  }
+
+  private pointInPolygon(x: number, y: number, points: Point[]) {
+    let inside = false;
+    for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+      const pi = points[i];
+      const pj = points[j];
+      const intersects = ((pi.y > y) !== (pj.y > y))
+        && (x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x);
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  }
+
+  update(_t: number, delta: number) {
     for (const shot of this.remoteShotQueue) {
       this.applyRemoteShot(shot.playerId, shot.angle, shot.power);
     }
     this.remoteShotQueue = [];
 
+    this.stepPhysics(delta);
+    this.updateGhostTargets();
+
+    if (this.ball && !this.holeDone) {
+      this.updateBallStoppedState();
+      this.evaluateHoleCapture();
+    }
+
+    if (!this.holeDone) {
+      this.handleInput();
+    } else {
+      this.aimLineGfx.clear();
+    }
+
+    this.emitMovingBallState(delta);
+    this.updateHUDPositions();
+    this.drawCourse();
+  }
+
+  private stepPhysics(delta: number) {
+    this.physicsAccumulator = Math.min(
+      this.physicsAccumulator + delta,
+      PHYSICS_STEP_MS * MAX_PHYSICS_STEPS
+    );
+
+    while (this.physicsAccumulator >= PHYSICS_STEP_MS) {
+      this.matter.world.step(PHYSICS_STEP_MS);
+      this.physicsAccumulator -= PHYSICS_STEP_MS;
+    }
+  }
+
+  private updateGhostTargets() {
     // Gentle position correction for ghost balls — no velocity impulse
     this.ghostBalls.forEach((gb) => {
       if (!gb.target || !gb.body) return;
@@ -396,41 +658,73 @@ export class GameScene extends Phaser.Scene {
         const lerp = 0.08;
         const nx = gb.body.position.x + dx * lerp;
         const ny = gb.body.position.y + dy * lerp;
-        (gb.body as any).position.x = nx;
-        (gb.body as any).position.y = ny;
-        (gb.body as any).positionPrev.x = nx - (gb.body as any).velocity.x;
-        (gb.body as any).positionPrev.y = ny - (gb.body as any).velocity.y;
+        this.moveBody(gb.body, nx, ny, gb.body.velocity.x, gb.body.velocity.y);
       }
     });
+  }
 
-    // Ball stopped detection (own ball)
-    if (this.ball) {
+  private updateBallStoppedState() {
+    if (!this.ball) return;
+    const vel = Math.sqrt(this.ball.velocity.x ** 2 + this.ball.velocity.y ** 2);
+    if (vel < 0.01) {
+      this.stillFrames++;
+    } else {
+      this.stillFrames = 0;
+    }
+  }
+
+  private evaluateHoleCapture() {
+    if (!this.ball) return;
+
+    const hx = this.courseData.hole.x;
+    const hy = this.courseData.hole.y;
+    const dx = hx - this.ball.position.x;
+    const dy = hy - this.ball.position.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const speed = Math.sqrt(this.ball.velocity.x ** 2 + this.ball.velocity.y ** 2);
+    const captureZone = this.courseData.hole.triggerRadius * 1.2;
+
+    if (dist < captureZone && speed < 1.1 && dist > 0.1) {
+      const pull = Phaser.Math.Clamp((captureZone - dist) / captureZone, 0, 1) * 0.09;
+      this.moveBody(
+        this.ball,
+        this.ball.position.x + dx * pull,
+        this.ball.position.y + dy * pull,
+        this.ball.velocity.x * 0.82,
+        this.ball.velocity.y * 0.82
+      );
+    }
+
+    if (dist < this.courseData.hole.visualRadius + BALL_RADIUS * 0.75 && speed < HOLE_CAPTURE_SPEED) {
+      this.holeCaptureFrames++;
+      if (this.holeCaptureFrames >= HOLE_CAPTURE_FRAMES) {
+        this.onHoleComplete(true);
+      }
+    } else {
+      this.holeCaptureFrames = 0;
+    }
+  }
+
+  private emitMovingBallState(delta: number) {
+    if (!this.ball) return;
+    this.ballStateTimer += delta;
+    if (this.ballStateTimer > 100) {
+      this.ballStateTimer = 0;
       const vel = Math.sqrt(this.ball.velocity.x ** 2 + this.ball.velocity.y ** 2);
-      if (vel < 0.01) {
-        this.stillFrames++;
-      } else {
-        this.stillFrames = 0;
+      if (vel > 0.01) {
+        this.emitBallState();
       }
     }
+  }
 
-    // Handle input
-    if (!this.holeDone) {
-      this.handleInput();
-    }
-
-    // Periodically send ball state
-    if (this.ball) {
-      this.ballStateTimer += _delta;
-      if (this.ballStateTimer > 100) {
-        this.ballStateTimer = 0;
-        const vel = Math.sqrt(this.ball.velocity.x ** 2 + this.ball.velocity.y ** 2);
-        if (vel > 0.01) {
-          this.emitBallState();
-        }
-      }
-    }
-
-    this.drawCourse();
+  private moveBody(body: MatterJS.BodyType, x: number, y: number, vx: number, vy: number) {
+    (body as any).position.x = x;
+    (body as any).position.y = y;
+    (body as any).positionPrev.x = x - vx;
+    (body as any).positionPrev.y = y - vy;
+    (body as any).velocity.x = vx;
+    (body as any).velocity.y = vy;
+    (body as any).speed = Math.sqrt(vx * vx + vy * vy);
   }
 
   private handleInput() {
@@ -449,9 +743,10 @@ export class GameScene extends Phaser.Scene {
     const MIN_SHOT_DIST = 12;
     const MIN_LINE_DIST = 8;
     const MAX_DRAG_BASE = 200;
+    const velocity = Math.sqrt(this.ball.velocity.x ** 2 + this.ball.velocity.y ** 2);
 
     if (ptr.isDown && !this.isAiming && !this.isPanning) {
-      if (ballDist < BALL_CLICK_RADIUS && this.stillFrames >= 60) {
+      if (ballDist < BALL_CLICK_RADIUS && isBallStopped(velocity, this.stillFrames)) {
         this.isAiming = true;
         this.aimStart.set(worldPtr.x, worldPtr.y);
       } else {
@@ -537,12 +832,12 @@ export class GameScene extends Phaser.Scene {
     });
 
     if (this.strokeCount >= this.maxStrokes) {
-      this.time.delayedCall(4000, () => this.onHoleComplete());
+      this.time.delayedCall(4000, () => this.onHoleComplete(false));
     }
   }
 
   private emitBallState() {
-    if (!this.ball) return;
+    if (!this.ball || !localPlayerId) return;
     socket.emit('message', {
       type: 'ball_state',
       playerId: localPlayerId,
@@ -553,11 +848,50 @@ export class GameScene extends Phaser.Scene {
     });
   }
 
-  private onHoleComplete() {
+  private onHoleComplete(animate: boolean) {
     if (this.holeDone) return;
     this.holeDone = true;
+    this.isAiming = false;
+    this.isPanning = false;
+    this.aimLineGfx.clear();
+
+    if (animate && this.ball) {
+      this.sinkingBall = {
+        x: this.ball.position.x,
+        y: this.ball.position.y,
+        radius: BALL_RADIUS,
+        alpha: 1,
+        shadowAlpha: 0.28,
+      };
+      this.matter.world.remove(this.ball);
+      (this.ball as any) = null;
+      this.tweens.add({
+        targets: this.sinkingBall,
+        x: this.courseData.hole.x,
+        y: this.courseData.hole.y,
+        radius: 0.8,
+        alpha: 0.08,
+        shadowAlpha: 0,
+        duration: 460,
+        ease: 'Cubic.easeIn',
+        onComplete: () => {
+          this.sinkingBall = null;
+          this.finishHole();
+        },
+      });
+      return;
+    }
+
     if (this.ball) this.matter.world.remove(this.ball);
     (this.ball as any) = null;
+    this.finishHole();
+  }
+
+  private finishHole() {
+    if (this.holeCompletionSent) return;
+    if (!localPlayerId) return;
+    this.holeCompletionSent = true;
+    this.playersDone.add(localPlayerId);
 
     socket.emit('message', {
       type: 'hole_completed',

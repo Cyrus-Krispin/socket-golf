@@ -1,19 +1,23 @@
 {
-  "name": "Hole 2 – The Slalom",
+  "name": "Hole 2 - The Slalom",
   "par": 3,
   "worldWidth": 640,
   "worldHeight": 770,
   "tee": { "x": 320, "y": 710 },
-  "hole": { "x": 320, "y": 60, "visualRadius": 7, "triggerRadius": 12 },
+  "hole": { "x": 320, "y": 70, "visualRadius": 9, "triggerRadius": 15 },
   "walls": [
-    { "x": 240, "y": 220, "width": 200, "height": 16 },
-    { "x": 400, "y": 380, "width": 200, "height": 16 },
-    { "x": 240, "y": 540, "width": 200, "height": 16 }
+    { "x": 228, "y": 218, "width": 178, "height": 18, "rotation": -0.12 },
+    { "x": 414, "y": 382, "width": 190, "height": 18, "rotation": 0.12 },
+    { "x": 228, "y": 546, "width": 178, "height": 18, "rotation": -0.1 }
   ],
   "fairway": {
     "vertices": [
-      { "x": 70, "y": 30 }, { "x": 570, "y": 30 },
-      { "x": 570, "y": 730 }, { "x": 70, "y": 730 }
+      { "x": 214, "y": 38 }, { "x": 426, "y": 38 },
+      { "x": 500, "y": 158 }, { "x": 424, "y": 288 },
+      { "x": 520, "y": 414 }, { "x": 424, "y": 560 },
+      { "x": 500, "y": 732 }, { "x": 140, "y": 732 },
+      { "x": 216, "y": 560 }, { "x": 120, "y": 414 },
+      { "x": 216, "y": 288 }, { "x": 140, "y": 158 }
     ]
   }
 }

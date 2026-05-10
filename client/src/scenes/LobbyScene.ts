@@ -22,14 +22,21 @@ export class LobbyScene extends Phaser.Scene {
       color: '#4ecdc4',
     }).setOrigin(0.5);
 
-    this.add.text(cx(), cy() - 46, 'no login. no accounts. just golf.', {
+    const subtitle = this.add.text(cx(), cy() - 46, 'no login. no accounts. just golf.', {
       fontFamily: '"Courier New", monospace',
       fontSize: '13px',
       color: '#888888',
     }).setOrigin(0.5).setScrollFactor(0);
 
-    this.scale.on('resize', () => {
+    const resizeTitle = () => {
+      if (!this.cameras.main) return;
       title.setPosition(cx(), cy() - 80);
+      subtitle.setPosition(cx(), cy() - 46);
+    };
+    this.scale.on('resize', resizeTitle);
+    this.events.once('shutdown', () => {
+      this.scale.off('resize', resizeTitle);
+      if (this.domContainer?.parentNode) this.domContainer.remove();
     });
 
     connectSocket();
